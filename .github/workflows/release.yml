@@ -19,7 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        # windows-2022, not windows-latest: newer images carry Visual Studio 18,
+        # which npm's bundled node-gyp cannot detect ("unknown version undefined");
+        # the stack's supported Windows toolset is VS 2022 (v143).
+        os: [windows-2022, ubuntu-latest]
     steps:
       # The stack's MSVC intermediate paths mirror its source tree - without
       # long paths a deep runner workspace fails with "Cannot open source file".
