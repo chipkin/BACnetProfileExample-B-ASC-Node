@@ -1,0 +1,81 @@
+name: Build and Release
+
+# Per-push build + smoke gate, and a GitHub Release on version tags - the
+# series-standard CI shape, in npm form. `npm install` compiles the CAS BACnet
+# Stack from the (private) submodule source, so checkout needs a token that can
+# read it, and the first run on a runner takes 10-20 minutes.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build + smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      # The stack's MSVC intermediate paths mirror its source tree - without
+      # long paths a deep runner workspace fails with "Cannot open source file".
+      - name: Enable long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CAS_STACK_PAT || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # -frtti: node-gyp defaults to -fno-rtti, which breaks the Linux addon
+      # build - same env the stack's own workflows use.
+      - name: Install (compiles the CAS BACnet Stack addon)
+        env:
+          CXXFLAGS: -frtti
+          CFLAGS: -frtti
+          npm_config_cflags_cc: -frtti
+          npm_config_cflags: -frtti
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Smoke test (device must come up and stay up)
+        shell: bash
+        run: |
+          npx tsx main.ts --port 47821 > smoke.log 2>&1 &
+          APP_PID=$!
+          for i in $(seq 1 30); do
+            grep -q "ready" smoke.log && break
+            sleep 1
+          done
+          sleep 3
+          if ! kill -0 $APP_PID 2>/dev/null; then
+            echo "FAILED: process exited early"; cat smoke.log; exit 1
+          fi
+          grep -q "ready" smoke.log || { echo "FAILED: no ready banner"; cat smoke.log; exit 1; }
+          kill $APP_PID
+          echo "OK - device came up and stayed up"
+          cat smoke.log
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

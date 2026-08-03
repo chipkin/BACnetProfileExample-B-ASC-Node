@@ -1,0 +1,22 @@
+{
+  "name": "bacnet-profile-example-b-asc-node",
+  "version": "1.0.0",
+  "description": "BACnet B-ASC (Application Specific Controller) profile example - Node.js. Uses the CAS BACnet Stack.",
+  "private": true,
+  "license": "CC0-1.0",
+  "workspaces": [
+    "submodules/cas-bacnet-stack"
+  ],
+  "scripts": {
+    "start": "tsx main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.20.8 <=24.x"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
