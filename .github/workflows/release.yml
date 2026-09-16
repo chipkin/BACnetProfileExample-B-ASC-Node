@@ -1,14 +1,14 @@
 name: Build and Release
 
-# Per-push build + smoke gate, and a GitHub Release on version tags - the
-# series-standard CI shape, in npm form. `npm install` compiles the CAS BACnet
+# PR build + smoke gate, and a GitHub Release on version tags - the
+# series-standard CI shape, in npm form. Plain pushes to main no longer trigger
+# CI (a merged PR was already tested). `npm install` compiles the CAS BACnet
 # Stack from the (private) submodule source, so checkout needs a token that can
 # read it, and the first run on a runner takes 10-20 minutes.
 
 on:
   pull_request:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
