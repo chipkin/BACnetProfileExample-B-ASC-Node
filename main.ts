@@ -125,11 +125,19 @@ const APP_VERSION = "1.0.0";
 // 389003, see the series' device-instance table) so several examples can run
 // on one subnet. Overridable at runtime with --deviceID, as BACnet requires.
 let g_deviceInstance = 389003;
-const VENDOR_IDENTIFIER = 389; // Chipkin Automation Systems
-const DEVICE_NAME = "Rainbow";
-const DEVICE_DESCRIPTION = "BACnet B-ASC (Application Specific Controller) example - Node.js";
-const VENDOR_NAME = "Chipkin Automation Systems";
-const MODEL_NAME = "CAS BACnet Stack B-ASC Example";
+const VENDOR_IDENTIFIER = 389; // Chipkin Automation Systems - replace with the vendor ID ASHRAE assigns you.
+// Object_Name must be UNIQUE across the whole BACnet internetwork - two
+// devices with the same name is a spec violation, and it is the exact,
+// silent failure mode this series warns about elsewhere in this file (see
+// the "SILENT TRAP" comments below and TUTORIAL.md). Here it is a
+// compile-time constant, which is fine for a single running copy of this
+// example; a real product must make it per-unit configurable (serial
+// number, DIP switches, a config file, or a --deviceName argument) so two
+// units never boot with the same name.
+const DEVICE_NAME = "Rainbow"; // replace with your product's per-unit device name.
+const DEVICE_DESCRIPTION = "BACnet B-ASC (Application Specific Controller) example - Node.js"; // replace with your product's description.
+const VENDOR_NAME = "Chipkin Automation Systems"; // replace with your company's name.
+const MODEL_NAME = "CAS BACnet Stack B-ASC Example"; // replace with your product's model name.
 
 // DM-DCC-B: the password a client must present with DeviceCommunicationControl.
 // Empty string = accept requests that carry no password (and requests carrying

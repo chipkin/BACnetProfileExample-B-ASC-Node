@@ -8,6 +8,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Restructured the documentation: `README.md` is cut down to this example
+  only (series-framing, generic profile prose, and "Use this in your own
+  project" / "The interesting parts of main.ts" moved out); added
+  `TUTORIAL.md` (extending the example, who serves what, reviewing your
+  device, troubleshooting) and `docs/PICS.md` (a full ANSI/ASHRAE 135 Annex A
+  Protocol Implementation Conformance Statement) plus the `docs/objects.json`
+  input that generates its objects-and-properties tables. `AGENTS.md` updated
+  to match the new layout and to state plainly that this is a Node.js build,
+  not a CMake one.
+
 ### Added
 
 - The complete B-ASC example application (`main.ts`): device 389003 ("Rainbow"),
