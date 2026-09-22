@@ -30,6 +30,10 @@ import {
     BACnetStack_AddDevice,
     BACnetStack_AddNetworkPortObjectWithNetworkNumber,
     BACnetStack_AddObject,
+    BACnetStack_GetAPIMajorVersion,
+    BACnetStack_GetAPIMinorVersion,
+    BACnetStack_GetAPIPatchVersion,
+    BACnetStack_GetAPIBuildVersion,
     BACnetStack_RegisterCallbackDeviceCommunicationControl,
     BACnetStack_RegisterCallbackGetPropertyBool,
     BACnetStack_RegisterCallbackGetPropertyCharacterString,
@@ -119,7 +123,12 @@ import { SimpleUDP } from "./common/SimpleUDP";
 // instance (it must be unique on the whole BACnet internetwork).
 
 const APP_NAME = "BACnet B-ASC (Application Specific Controller) Example - Node";
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
+
+// Firmware_Revision (44) names the underlying CAS BACnet Stack, not this
+// app - it is computed once at startup from the stack's own real version
+// numbers (after LoadBACnetFunctions() succeeds), not per-property-read.
+let g_firmwareRevision = "";
 
 // Every example in this series has its own default device instance (B-ASC =
 // 389003, see the series' device-instance table) so several examples can run
@@ -599,7 +608,7 @@ function GetPropertyCharacterString(
             return text(MODEL_NAME);
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_FIRMWARE_REVISION) {
-            return text(APP_VERSION);
+            return text(g_firmwareRevision);
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_APPLICATION_SOFTWARE_VERSION) {
             return text(APP_VERSION);
@@ -779,6 +788,9 @@ async function main(): Promise<void> {
         console.error(`Error: failed to load the CAS BACnet Stack: ${CASBACnetStackAdapter_LastError()}`);
         process.exit(1);
     }
+    g_firmwareRevision =
+        `${BACnetStack_GetAPIMajorVersion()}.${BACnetStack_GetAPIMinorVersion()}.` +
+        `${BACnetStack_GetAPIPatchVersion()}.${BACnetStack_GetAPIBuildVersion()}`;
 
     if (HandleHelpAndVersionArgs(argv, APP_NAME, APP_VERSION)) {
         return;
