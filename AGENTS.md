@@ -76,7 +76,7 @@ Input 1.
 
 ## Conventions
 
-- Device is named "Rainbow"; objects use the series' colour names; vendor id
+- Device is named "Chipkin Example B-ASC"; objects use the series' colour names; vendor id
   389.
 - Implement **only** the services and objects the B-ASC profile requires -
   but expose **every required property** of each object.

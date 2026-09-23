@@ -55,7 +55,7 @@ answers it.
 ## The device this example creates
 
 ```
-Device 389003  "Rainbow"   (Vendor 389 - Chipkin Automation Systems)
+Device 389003  "Chipkin Example B-ASC"   (Vendor 389 - Chipkin Automation Systems)
     │
     ├── Analog Input 1        "Bronze"      Present_Value  21.5     (REAL, degrees Celsius; read-only)
     ├── Binary Input 1        "Emerald"     Present_Value  inactive (read-only)
@@ -95,7 +95,7 @@ which is the point of a profile example.
 
 | Object type | Instance | Name |
 |-------------|:--------:|------|
-| Device | 389003 | Rainbow |
+| Device | 389003 | Chipkin Example B-ASC |
 | Analog Input | 1 | Bronze |
 | Binary Input | 1 | Emerald |
 | Multi-state Input | 1 | Hot Pink |
@@ -190,7 +190,7 @@ Expected output:
 BACnet B-ASC (Application Specific Controller) Example - Node v1.0.0
 CAS BACnet Stack v6.0.0.0
 FYI: listening on <your-ip>:47808 (broadcast <your-subnet-broadcast>)
-FYI: Device 389003 ("Rainbow") ready. Vendor ID 389. Press 'h' for help.
+FYI: Device 389003 ("Chipkin Example B-ASC") ready. Vendor ID 389. Press 'h' for help.
 ```
 
 The device listens on UDP **47808** (BACnet/IP) by default. Allow that port
@@ -233,11 +233,11 @@ Use a BACnet client such as the
    instance **389003** (vendor **389**). It also broadcasts an I-Am at
    start-up.
 2. **Browse the object model** - the device shows eight objects: the Device
-   (`Rainbow`), the three read-only inputs, the three commandable outputs, and
+   (`Chipkin Example B-ASC`), the three read-only inputs, the three commandable outputs, and
    the Network Port (`Vermilion`). Reading the Device's `Object_List` returns
    all eight.
 3. **Read the Device** - ReadProperty `389003` -> `Object_Name` returns
-   `"Rainbow"`; `Description` returns the profile description string.
+   `"Chipkin Example B-ASC"`; `Description` returns the profile description string.
 4. **Read a sensor** - ReadProperty Analog Input `1` -> `Present_Value`
    returns `21.5`; `Units` returns `degrees-Celsius`. Repeat for Binary Input
    `1` (`"Emerald"`) and Multi-State Input `1` (`"Hot Pink"`, has

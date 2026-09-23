@@ -1,6 +1,6 @@
 {
   "name": "bacnet-profile-example-b-asc-node",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "BACnet B-ASC (Application Specific Controller) profile example - Node.js. Uses the CAS BACnet Stack.",
   "private": true,
   "license": "CC0-1.0",

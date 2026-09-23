@@ -123,7 +123,7 @@ import { SimpleUDP } from "./common/SimpleUDP";
 // instance (it must be unique on the whole BACnet internetwork).
 
 const APP_NAME = "BACnet B-ASC (Application Specific Controller) Example - Node";
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.0.2";
 
 // Firmware_Revision (44) names the underlying CAS BACnet Stack, not this
 // app - it is computed once at startup from the stack's own real version
@@ -143,7 +143,7 @@ const VENDOR_IDENTIFIER = 389; // Chipkin Automation Systems - replace with the 
 // example; a real product must make it per-unit configurable (serial
 // number, DIP switches, a config file, or a --deviceName argument) so two
 // units never boot with the same name.
-const DEVICE_NAME = "Rainbow"; // replace with your product's per-unit device name.
+const DEVICE_NAME = "Chipkin Example B-ASC"; // replace with your product's per-unit device name.
 const DEVICE_DESCRIPTION = "BACnet B-ASC (Application Specific Controller) example - Node.js"; // replace with your product's description.
 const VENDOR_NAME = "Chipkin Automation Systems"; // replace with your company's name.
 const MODEL_NAME = "CAS BACnet Stack B-ASC Example"; // replace with your product's model name.
