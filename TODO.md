@@ -1,9 +1,9 @@
 # TODO
 
 Defects found while porting this example to stack `6.x` @ `64b2cfac5` (Node
-package 6.1.2). Not filed upstream; each entry carries its evidence.
+package 6.1.2), each with its upstream issue and evidence.
 
-## Adapter defect (not filed): the DeviceCommunicationControl wrapper hands JS an unseeded errorCode Buffer
+## Adapter defect, [cas-bacnet-stack#3969](https://github.com/chipkin/cas-bacnet-stack/issues/3969): the DeviceCommunicationControl wrapper hands JS an unseeded errorCode Buffer
 
 **Where.** `submodules/cas-bacnet-stack/adapters/node/@chipkin/cas-bacnet-stack/src/interface_callbacks.cc`,
 `RegisterCallbackDeviceCommunicationControlWrapped` (around line 2631):
