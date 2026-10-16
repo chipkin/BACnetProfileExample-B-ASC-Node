@@ -1,75 +1,188 @@
 # BACnet B-ASC (Application Specific Controller) - Node.js example
 
 A minimal, copy-paste-friendly example showing how to implement the BACnet
-**B-ASC (Application Specific Controller)** device profile in TypeScript on
+**B-ASC (BACnet Application Specific Controller)** device profile in TypeScript on
 Node.js, using the
-[CAS BACnet Stack](https://store.chipkin.com/services/stacks/bacnet-stack). It
-listens on **BACnet/IP (UDP 47808)**, answers **ReadProperty** and
-**WriteProperty**, accepts **DeviceCommunicationControl**, and is discoverable
-via **Who-Is / I-Am**.
+[CAS BACnet Stack](https://store.chipkin.com/services/stacks/bacnet-stack).
+It listens on **BACnet/IP (UDP 47808)**, answers **ReadProperty**, accepts
+**WriteProperty** to its commandable outputs, responds to
+**DeviceCommunicationControl**, and is discoverable via **Who-Is / I-Am**. It
+announces itself with an **I-Am heartbeat** every 5 s - the message a management
+station's DeviceCommunicationControl visibly silences and lets resume. Each
+output **does what the winning command says** (a heating valve, a relay and a
+drive, each reporting back through an input), and a disconnected valve shows up
+as a **fault**. The valve, relay and drive are a
+[Simulation](#the-actuator-simulation); everything BACnet does with them is real.
+
+It is the Node.js edition of
+[BACnetProfileExample-B-ASC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ASC-CPP)
+(v1.4.0): the same device, the same objects and properties, the same commanding,
+Simulation, heartbeat and DeviceCommunicationControl handling, and the same Wire
+Tests - a client cannot tell the two apart on the wire.
 
 **[Tagged source releases](https://github.com/chipkin/BACnetProfileExample-B-ASC-Node/releases)**
-- there is no prebuilt binary to download; `npm install` always compiles the
-CAS BACnet Stack addon locally (see [Build](#build) below).
+- there is no prebuilt binary to download; `npm install` compiles the CAS BACnet
+Stack addon locally (see [Build](#build) below).
 
 - **[TUTORIAL.md](TUTORIAL.md)** - how to extend this example and how to review
   it for conformance. Read it when you start turning this into your own device.
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.0.0**, built and verified
-> against the CAS BACnet Stack submodule pinned at `6.x-TestTool` @ `4a69c9eb`
-> (`package.json` calls this npm package **6.1.0**; the compiled API itself
-> reports **v6.0.0.0** - the program's own start-up banner is correct, this
-> line is not authoritative), at **Protocol_Revision 24**, with the vendored
-> Node `common/` helper at **v1.0.0**. Running the example prints the app and
-> API versions - if what it prints disagrees with this line, trust the
-> program and check `CHANGELOG.md`. It does not print Protocol_Revision or the
-> common helper version; read the former back with ReadProperty and check
-> `common/CHANGELOG.md` for the latter.
+> **Versions:** this document describes **example v1.1.0**, built and verified
+> against **CAS BACnet Stack 6.0.23** (`6.x` @ `64b2cfac5`; its Node package
+> `@chipkin/cas-bacnet-stack` 6.1.2, built as the production addon), at
+> **Protocol_Revision 30**, with the vendored Node `common/` helper at
+> **v3.0.0**, on **Node.js 24.21**. Running the example prints the example,
+> stack and `common/` versions - if what it prints disagrees with this line,
+> trust the program and check `CHANGELOG.md`.
+>
+> **Protocol_Revision** is the revision of the ASHRAE 135 standard a device claims to conform
+> to. It is a number every BACnet device advertises, and it changes real behaviour: at revision
+> 20 and above, for example, the deprecated plain `disable` form of
+> DeviceCommunicationControl must be rejected (see [DeviceCommunicationControl](#devicecommunicationcontrol-the-b-asc-addition) below).
 
-## What is the B-ASC (Application Specific Controller) profile?
+## DeviceCommunicationControl (the B-ASC addition)
 
-**B-ASC (BACnet Application Specific Controller)**, defined in Annex L of
-ANSI/ASHRAE 135, is a **B-SA (Smart Actuator)** - a device that reports values
-and accepts commands - plus **DeviceCommunicationControl**: a client can tell
-the device to stop initiating traffic, optionally for a limited time,
-optionally guarded by a password.
+`DeviceCommunicationControl` lets a management station tell a device to go quiet -
+useful to silence a misbehaving or noisy device during commissioning - and later
+to resume. The request carries:
 
-A B-ASC device answers **ReadProperty** and **WriteProperty**, is
-discoverable, and executes **DeviceCommunicationControl**. This example
-implements exactly those capabilities and nothing more - no COV, no alarming,
-no scheduling, no trending, no ReadPropertyMultiple.
+- an **enable/disable** choice,
+- an optional **time duration** (minutes) after which the device re-enables on its
+  own, and
+- an optional **password**.
 
-**But it is still a full BACnet device.** Even a small profile must present
-the standard object model - a **Device** object, a **Network Port** object
-(every device needs one), its sensor objects, and its commandable output
-objects - and each object must expose all of its **required properties**. The
-CAS BACnet Stack generates most of those automatically (Object_Identifier,
-Object_Type, Status_Flags, Object_List, Protocol_*, Priority_Array's slot
-resolution when the stack owns it, ...); this example supplies the rest,
-including its own application-owned priority-array model for the three
-commandable outputs. [docs/PICS.md](docs/PICS.md) lists every property and who
-answers it.
+The CAS BACnet Stack runs the actual enable/disable state machine and the
+re-enable timer; this example's callback (`DeviceCommunicationControl` in
+`main.ts`) just **validates the password** and logs what was asked.
+
+Concretely, the callback:
+
+1. Rejects a request for any device instance other than this one, naming
+   `optional-functionality-not-supported` on the wire.
+2. Compares the supplied password (a `Buffer` holding exactly the octets the
+   request carried) to the configured one (`g_dccPassword`, set with
+   `--dcc-password`, as UTF-8 octets) by **length first, then bytes** - never as
+   decoded strings, because a BACnet CharacterString may legitimately contain an
+   embedded NUL. A device with no configured password (the shipped default)
+   accepts any request. A mismatch is rejected with `errorCode =
+   ERROR_CODE_PASSWORD_FAILURE`, which the stack pairs with `Error Class =
+   SECURITY` (clause 16.1.1.3.1).
+3. On a correct (or absent) password, accepts and logs the requested action -
+   `enable`, the deprecated `disable`, or `disable-initiation` - and the
+   optional time duration.
+4. **Sets `errorCode` on every `false` return, with no exception.** Unlike the
+   `SetProperty*` callbacks (which have a sensible `write-access-denied`
+   fallback), DeviceCommunicationControl has no sensible default: at this Stack
+   Pin, on `false`, the stack answers `Error Class = SERVICES` only for
+   `optional-functionality-not-supported` and `service-request-denied`, and
+   turns any other code - including whatever an unset `errorCode` holds - into
+   `SECURITY` / `password-failure`. `main.ts` always names the error it means.
+
+> **Protocol_Revision >= 20 note:** the plain **`disable`** value (stop initiating
+> *and* responding) is **deprecated**. At Protocol_Revision 30 the stack rejects it
+> with `service-request-denied`, as 135-2024 clause 16.1.2 requires ("If the
+> request is valid and the 'Enable/Disable' parameter is the deprecated value
+> DISABLE, the request shall be ignored..."). The modern choice is
+> **`disable-initiation`**. So only `enable` and `disable-initiation` take
+> effect. The callback still logs what the client asked for on the deprecated
+> path, because the rejection happens in the stack after the callback returns.
+
+**What you can observe.** Clause 16.1.2 stops a device initiating messages
+*other than* I-Am and I-Have sent in answer to Who-Is and Who-Has - so
+`disable-initiation` is only visible on a device that initiates something. This
+one does: an unsolicited **I-Am heartbeat** every 5 s (`HeartbeatTick()`,
+section 2d of `main.ts`; I-Am is the service DM-DDB-B has the device initiate,
+so the BACnet Surface does not grow). After a `disable-initiation` the heartbeat
+**stops** - the stack refuses to send it - while ReadProperty, WriteProperty and
+Who-Is are still answered. After an `enable`, or when the request's time
+duration runs out, it **resumes**. The example keeps no communication state of
+its own: it asks for a heartbeat every 5 s and the stack decides. A product
+would announce far less often (minutes, or not at all); 5 s keeps the
+demonstration watchable.
+
+The example ships with **no password** (accept any request). Start it with
+`--dcc-password <string>` to require one; a missing or wrong password is then
+rejected with `Error Class = SECURITY`, `Error Code = password-failure`. In your
+product, set the password from your own configuration.
 
 ## The device this example creates
 
 ```
 Device 389003  "Chipkin Example B-ASC"   (Vendor 389 - Chipkin Automation Systems)
     │
-    ├── Analog Input 1        "Bronze"      Present_Value  21.5     (REAL, degrees Celsius; read-only)
-    ├── Binary Input 1        "Emerald"     Present_Value  inactive (read-only)
-    ├── Multi-State Input 1   "Hot Pink"    Present_Value  1        (state 1..3; read-only)
-    ├── Analog Output 1       "Chartreuse"  Present_Value  0.0      (REAL, percent; commandable, 16-slot priority array)
-    ├── Binary Output 1       "Fuchsia"     Present_Value  inactive (commandable, 16-slot priority array)
-    ├── Multi-State Output 1  "Indigo"      Present_Value  1        (state 1..3; commandable, 16-slot priority array)
+    ├── Analog Input  1       "Bronze"      Present_Value  21.5 -> follows the setpoint  (REAL, degrees Celsius; read-only)
+    ├── Binary Input  1       "Emerald"     Present_Value  follows Binary Output 1      (0 = inactive / 1 = active; read-only)
+    ├── Multi-State Input 1   "Hot Pink"    Present_Value  follows Multi-State Output 1 (state, 1..3; read-only)
+    ├── Analog Output 1       "Chartreuse"  Present_Value  20.0    (REAL setpoint, 10.0 .. 30.0 C; WRITABLE, commandable)
+    ├── Binary Output 1       "Fuchsia"     Present_Value  inactive  (0/1 relay; WRITABLE, commandable)
+    ├── Multi-State Output 1  "Indigo"      Present_Value  1       (speed, 1..3; WRITABLE, commandable)
     └── Network Port 1        "Vermilion"   the BACnet/IP port     (required on every device)
 ```
 
+The three **input** objects (Bronze, Emerald, Hot Pink) are the shared minimum
+every example in this series carries; here each is the **feedback** of one
+output. The three **output** objects (Chartreuse, Fuchsia, Indigo) are
+commandable via a `Priority_Array`. Object names follow this series'
+colour-naming convention (Device is always "Chipkin Example B-ASC").
+
+## The scenario: a controller a management station can silence
+
+What a B-ASC is for, from Annex L.4.3 of ANSI/ASHRAE 135-2024: a B-SA's
+*"Ability to allow modification of some or all of its BACnet objects by another
+device"*, plus *"Ability to respond to communication control messages"*. Against
+a **Peer** - a controller and a management station (any BACnet client, or the
+Python client in [`tests/`](tests/README.md)):
+
+1. **Commanded.** The Peer writes Analog Output 1 = `24.0` at priority 8: the
+   temperature (Analog Input 1) climbs to `24.0`. A write at a lower priority
+   changes nothing; relinquishing hands the output to the next command, then to
+   `Relinquish_Default` (`20.0`). Binary and Multi-State Output 1 work the same
+   way, with Binary Input 1 and Multi-State Input 1 as their feedback - exactly
+   as in the B-SA example.
+2. **Silenced.** The management station sends DeviceCommunicationControl
+   `disable-initiation` with the password: the I-Am heartbeat stops. The
+   controller still answers ReadProperty, still obeys WriteProperty, and still
+   answers a Who-Is with an I-Am.
+3. **Resumed.** `enable` brings the heartbeat back. A `disable-initiation` for
+   a **time duration** (1 minute, say) ends by itself: the heartbeat resumes
+   when the minute is up, with no `enable` sent.
+4. **Failure Mode - a request it must refuse.** A wrong or missing password gets
+   Error `security` / `password-failure`; the deprecated plain `disable` gets
+   Error `services` / `service-request-denied` (clause 16.1.1.3.1). Neither
+   silences anything. Out-of-range writes get `value-out-of-range`; a write to
+   an input gets `write-access-denied`.
+5. **Failure Mode - a disconnected actuator.** Analog Output 1 `Reliability`
+   reads `no-output` and `Status_Flags` FAULT is TRUE; commands are still
+   accepted, but the temperature does not move until the valve is reconnected.
+
+### The actuator Simulation
+
+The same as the C++ edition's, and so the same as the [B-SA example's](https://github.com/chipkin/BACnetProfileExample-B-SA-CPP):
+non-BACnet scaffolding, outside the BACnet Surface, in section 1b of
+[`main.ts`](main.ts) (`ActuatorSimulationTick()`, called beside
+`BACnetStack_Tick()`). Once a second the **heating valve** moves the temperature
+(Analog Input 1) up to 1.0 C toward the winning Analog Output 1 setpoint, the
+**relay's feedback contact** (Binary Input 1) takes the winning Binary Output 1
+command, and the **drive's speed** (Multi-State Input 1) takes the winning
+Multi-State Output 1 command. "Winning" is `ResolvedCommand()`, the same answer
+the stack gives for `Present_Value` (clause 19.2).
+
+The **disconnected valve** is a test-only hook, not a feature: if the
+environment variable `CAS_EXAMPLE_TEST_ACTUATOR_FAULT_FILE` names a file, the
+valve actuator counts as disconnected for as long as that file exists. Nothing
+on the network can disconnect it. The I-Am heartbeat is **not** Simulation: it
+is a real BACnet message, and the one this example initiates.
+
 ## What this example supports
 
-The example implements exactly the capabilities below - and nothing more,
-which is the point of a profile example.
+The example implements exactly the capabilities below - and nothing more, which
+is the point of a profile example. These capabilities satisfy the **B-ASC
+(Application Specific Controller)** profile; because B-ASC's BIBBs are a superset of the
+**B-GENERAL** baseline, a conformant B-ASC device necessarily satisfies
+**B-GENERAL** too. That is subsumption, not a second claim: this repository still
+claims exactly one profile.
 
 ### BIBBs (BACnet Interoperability Building Blocks)
 
@@ -86,23 +199,23 @@ which is the point of a profile example.
 | Service | Notes |
 |---------|-------|
 | ReadProperty | Responds to property reads (DS-RP-B). |
-| WriteProperty | Accepts commands to the three output objects, priority-array semantics (DS-WP-B). |
-| DeviceCommunicationControl | Enable/disable-initiation, optional timed duration, optional password (DM-DCC-B). |
+| WriteProperty | Accepts writes to the commandable outputs' Present_Value (DS-WP-B). |
+| DeviceCommunicationControl | Stops/resumes communication, optionally timed/passworded (DM-DCC-B). |
 | Who-Is / I-Am | Answers Who-Is with I-Am, and broadcasts an I-Am on start-up (DM-DDB-B). |
 | Who-Has / I-Have | Answers Who-Has with I-Have (DM-DOB-B). |
 
 ### Object types
 
-| Object type | Instance | Name |
-|-------------|:--------:|------|
-| Device | 389003 | Chipkin Example B-ASC |
-| Analog Input | 1 | Bronze |
-| Binary Input | 1 | Emerald |
-| Multi-state Input | 1 | Hot Pink |
-| Analog Output | 1 | Chartreuse |
-| Binary Output | 1 | Fuchsia |
-| Multi-state Output | 1 | Indigo |
-| Network Port | 1 | Vermilion |
+| Object type | Instance | Name | Access |
+|-------------|:--------:|------|--------|
+| Device | 389003 | Chipkin Example B-ASC | - |
+| Analog Input | 1 | Bronze | read-only |
+| Binary Input | 1 | Emerald | read-only |
+| Multi-State Input | 1 | Hot Pink | read-only |
+| Analog Output | 1 | Chartreuse | writable (commandable) |
+| Binary Output | 1 | Fuchsia | writable (commandable) |
+| Multi-State Output | 1 | Indigo | writable (commandable) |
+| Network Port | 1 | Vermilion | - |
 
 Every required property of every object, and who answers it, is in
 [docs/PICS.md](docs/PICS.md).
@@ -112,10 +225,11 @@ Every required property of every object, and who answers it, is in
 This example **builds against the CAS BACnet Stack, which is a commercial
 Chipkin product** - it is not free or open source, and there is no
 public/trial build. The stack is referenced here as the **private** git
-submodule `submodules/cas-bacnet-stack` (tracking the `6.x-TestTool` branch)
-and consumed as an **npm workspace**: `npm install` compiles it from source
-and builds the package's TypeScript layer. You can only fetch and build it
-once you have a CAS BACnet Stack license and access to that repository.
+submodule `submodules/cas-bacnet-stack` (pinned to `6.x` @ `64b2cfac5`) and
+consumed as an **npm workspace**: `npm install` compiles it from source into a
+native Node addon and builds the package's TypeScript layer. You can only fetch
+and build it once you have a CAS BACnet Stack license and access to that
+repository.
 
 **To get the CAS BACnet Stack (and access to build this example), contact
 Chipkin:** <https://store.chipkin.com/services/stacks/bacnet-stack> or
@@ -128,27 +242,38 @@ This is a **self-contained** project. It ships:
 - `main.ts` - the example device.
 - `common/` - the shared Node.js helper (UDP, callbacks, CLI, keyboard)
   vendored in.
-- `package.json` / `tsconfig.json` - the build, the same on Windows, Linux,
-  and macOS.
+- `package.json` / `tsconfig.json` / `.npmrc` - the build, the same on Windows,
+  Linux and macOS. `.npmrc` sets `bacnet_testtool=0`, so `npm install` builds the
+  stack's **production** addon: the customer interface only, no test-tool
+  exports.
+- `tests/` - the Wire Tests, and `wiretest/` - the series' shared Python
+  Wiretest Harness they are written against (vendored).
 - `docs/PICS.md` - the conformance statement.
 - `docs/objects.json` - the input to the objects-and-properties generator.
 - `submodules/cas-bacnet-stack/` - the **CAS BACnet Stack as a git submodule**
   (private; requires a license - see above), consumed as an npm workspace. Its
-  sources compile into a native Node addon, so there is nothing to build, ship,
-  or install separately.
+  sources compile into a native Node addon, so there is no separate library to
+  build, ship, or install. The Node adapter is used in place from the submodule
+  (`submodules/cas-bacnet-stack/adapters/node/`); nothing of it is copied here.
+
+The stack binary - the addon `cas-bacnet-stack.node`, written to
+`submodules/cas-bacnet-stack/build/Release/` - is **never committed and never
+released**: `.gitignore` covers it, and a tagged release carries source only.
+Build it yourself from the submodule with `npm install`.
 
 ## Prerequisites
 
-- Node.js `>=18.20.8 <=24.x` and npm.
+- **Node.js 24.21 or a later 24.x**, with its npm (11.x). The stack's Node
+  package requires `>=24.21.0 <25`.
 - A C++17 toolchain (node-gyp needs it to compile the stack addon).
-- Git (to fetch the stack submodule).
+- Git (to fetch the stack submodule), and Python 3 for the Wire Tests.
 
 ### Windows
 
-- **Build tools** - Visual Studio 2022 Build Tools with the **"Desktop
-  development with C++"** workload, plus Python (the standard node-gyp
-  prerequisites). Newer Visual Studio versions are not supported by the
-  stack's current toolset.
+- **Build tools** - Visual Studio 2022 or 2026 (or their Build Tools) with the
+  **"Desktop development with C++"** workload, plus Python (the standard
+  node-gyp prerequisites). Node 24.21's own npm (11.19, node-gyp 12) finds
+  Visual Studio 2026 by itself; no `msvs_version` setting is needed.
 - Use a short project path - the stack's MSVC intermediate paths mirror its
   source tree, and long paths can fail to compile.
 
@@ -159,21 +284,26 @@ This is a **self-contained** project. It ships:
 
 ## Build
 
-npm only, and the same two commands on every platform:
+npm only, and the same commands on every platform:
 
 ```bash
 git clone --recursive https://github.com/chipkin/BACnetProfileExample-B-ASC-Node.git
 cd BACnetProfileExample-B-ASC-Node
 
-npm install
+npm install        # compiles the CAS BACnet Stack addon (production build)
+npm run build      # compiles main.ts and common/ to dist/
 ```
 
 Already cloned without `--recursive`? Run `git submodule update --init --recursive`
 first - the install needs the stack submodule.
 
-> **The first `npm install` takes 10-20 minutes** - it compiles the entire CAS
-> BACnet Stack into a native Node addon via node-gyp. Subsequent installs are
-> much faster once the addon is built.
+> **The first `npm install` takes a few minutes** (about 3 on a 12-core Windows
+> machine): it compiles the entire CAS BACnet Stack into a native Node addon via
+> node-gyp. npm prints `Unknown project config "bacnet_testtool"` on every run -
+> that is npm noticing the `.npmrc` setting it hands on to the stack's build, not
+> an error. To confirm which addon you built:
+> `node -e "const s=require('@chipkin/cas-bacnet-stack');s.LoadBACnetFunctions();console.log(s.IsTestToolBuild())"`
+> prints `false` for the production build.
 
 ## Run
 
@@ -181,25 +311,35 @@ first - the install needs the stack submodule.
 npm start                      # defaults: device 389003, UDP 47808
 npm start -- --port 47821      # non-default port (recommended while testing)
 npm start -- --deviceID 12345  # your own device instance
+npm start -- --dcc-password s3cret   # require a DeviceCommunicationControl password
 npm start -- --help
 ```
 
-Expected output:
+`npm start` runs `node dist/main.js`; run `npm run build` again after editing
+`main.ts`. Expected output:
 
 ```
-BACnet B-ASC (Application Specific Controller) Example - Node v1.0.0
-CAS BACnet Stack v6.0.0.0
-FYI: listening on <your-ip>:47808 (broadcast <your-subnet-broadcast>)
+BACnet B-ASC (Application Specific Controller) Example - Node v1.1.0
+CAS BACnet Stack version: 6.0.23.0
+Common helper (common/) version: 3.0.0
+FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
+TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
 FYI: Device 389003 ("Chipkin Example B-ASC") ready. Vendor ID 389. Press 'h' for help.
 ```
 
-The device listens on UDP **47808** (BACnet/IP) by default. Allow that port
-through your firewall. To use a different port, pass `--port`.
+The `TX` line is the start-up I-Am the device broadcasts to announce itself; the
+same line appears every 5 s after that, for the heartbeat (and stops while a
+`disable-initiation` is in force). It
+goes to the **local subnet broadcast** address (here `192.168.3.255`, computed
+from the Network Port's interface), not the global `255.255.255.255`. As clients
+talk to the device you'll see `RX ... bytes from ...` and `TX ... bytes to ...`
+lines; a WriteProperty to an output prints a line such as `WriteProperty:
+Analog Output 1 (Chartreuse) <- 24.00 @ priority 8`, and a
+DeviceCommunicationControl prints e.g. `DeviceCommunicationControl:
+disable-initiation (keep responding) (indefinitely)`.
 
-> **Two red `Error:` lines at start-up are expected and are not your bug** -
-> the stack's own debug logging (the device hearing its own broadcast I-Am,
-> and a one-time BACnet/SC UUID notice). [TUTORIAL.md](TUTORIAL.md#troubleshooting)
-> explains both.
+The device listens on UDP **47808** (BACnet/IP). Allow that port through your
+firewall. To use a different port, pass `--port` (see below).
 
 ### Command-line options
 
@@ -207,8 +347,9 @@ through your firewall. To use a different port, pass `--port`.
 |--------|---------|---------|
 | `--port <n>` | `47808` | UDP port to listen on (BACnet/IP). |
 | `--deviceID <n>` | `389003` | The device's BACnet instance number (BACnet requires this to be configurable). |
+| `--dcc-password <string>` | none | Require this password on DeviceCommunicationControl. Prints `FYI: DeviceCommunicationControl requires a password` at start-up (never the password). |
 | `--help`, `-h` | - | Show usage and exit. |
-| `--version` | - | Print the example and stack versions, then exit. |
+| `--version` | - | Print the example, stack, and `common/` helper versions, then exit. |
 
 ### Interactive commands
 
@@ -218,11 +359,13 @@ While the example runs, these keys are available:
 |-----|--------|
 | `h` | Show the version information and this command list. |
 | `q` | Quit. |
-| up arrow | Increase Analog Input 1 (`Bronze`) by 1.1. |
-| down arrow | Decrease Analog Input 1 (`Bronze`) by 1.1. |
+| up arrow | Disturb the simulated temperature (Analog Input 1, `Bronze`) up by 1.1. |
+| down arrow | Disturb the simulated temperature (Analog Input 1, `Bronze`) down by 1.1. |
 
-The up/down keys change the live `Present_Value` of the analog input, so a
-client re-reading it sees the new value.
+The up/down keys push the simulated temperature off its setpoint; within a few
+seconds the valve brings it back, and a client re-reading Analog Input 1 sees
+both. When stdin is a pipe rather than a terminal the same characters work (`q`
+quits) - that is how the Wire Tests stop the example.
 
 ## Verify
 
@@ -230,35 +373,71 @@ Use a BACnet client such as the
 [**CAS BACnet Explorer**](https://store.chipkin.com/products/tools/cas-bacnet-explorer):
 
 1. **Discover** - send a **Who-Is**. The device replies with **I-Am** from
-   instance **389003** (vendor **389**). It also broadcasts an I-Am at
-   start-up.
+   instance **389003** (vendor **389**). It also broadcasts an I-Am at start-up.
 2. **Browse the object model** - the device shows eight objects: the Device
-   (`Chipkin Example B-ASC`), the three read-only inputs, the three commandable outputs, and
-   the Network Port (`Vermilion`). Reading the Device's `Object_List` returns
-   all eight.
+   (`Chipkin Example B-ASC`), three inputs, three outputs, and the Network Port
+   (`Vermilion`). Reading the Device's `Object_List` returns all eight.
 3. **Read the Device** - ReadProperty `389003` -> `Object_Name` returns
-   `"Chipkin Example B-ASC"`; `Description` returns the profile description string.
-4. **Read a sensor** - ReadProperty Analog Input `1` -> `Present_Value`
-   returns `21.5`; `Units` returns `degrees-Celsius`. Repeat for Binary Input
-   `1` (`"Emerald"`) and Multi-State Input `1` (`"Hot Pink"`, has
-   `Number_Of_States` = 3).
-5. **Command an output** - WriteProperty Analog Output `1`'s `Present_Value`
-   at priority 8, then read it back; write `NULL` at priority 8 to relinquish
-   and confirm it falls back to `Relinquish_Default`. Repeat with Binary
-   Output `1` and Multi-State Output `1`; an out-of-range Multi-State write is
-   rejected `value-out-of-range`.
-6. **DeviceCommunicationControl** - send DCC with the wrong password and
-   confirm `password-failure`; with the right password, confirm
-   disable-initiation / enable behaves as documented in
-   [docs/PICS.md](docs/PICS.md).
+   `"Chipkin Example B-ASC"`; `Protocol_Revision` returns `30`; `Description` returns the
+   profile description string.
+4. **Read a sensor** - ReadProperty Analog Input `1` -> `Present_Value` returns
+   `20.0` once the valve has settled at the default setpoint (it starts at
+   `21.5`); `Units` returns `degrees-Celsius`. Repeat for Binary Input `1`
+   (`"Emerald"`) and Multi-State Input `1` (`"Hot Pink"`).
+5. **Command an output** - WriteProperty Analog Output `1` `Present_Value` = `24.0`
+   at priority `8`; re-read `Present_Value` (`24.0`) and `Priority_Array[8]`
+   (`24.0`), and watch Analog Input `1` climb to `24.0`; write `NULL` at priority
+   `8` to relinquish; `Present_Value` returns to `20.0` (its
+   `Relinquish_Default`), and so does Analog Input `1`. Repeat for
+   Binary/Multi-State Output (watch Binary / Multi-State Input `1`). A write to a
+   read-only *input*, or an out-of-range value, is rejected.
+6. **Communication control (the B-ASC test)** - watch the console (or a capture
+   of the subnet broadcast): a `TX ... (broadcast) ... I-Am` line every 5 s. Send
+   a **DeviceCommunicationControl** with `disable-initiation`: the device
+   SimpleACKs, the heartbeat lines stop, and it keeps answering reads and
+   writes. Send `enable` to resume. Sending the deprecated plain `disable` returns
+   `service-request-denied` at Protocol_Revision 30 - that is correct. Restart
+   the example with `--dcc-password s3cret`: a request with no password or the
+   wrong one is rejected with `security` / `password-failure`, and one with
+   `s3cret` is SimpleACKed.
 
 For a property-by-property review against the conformance statement, see
 [TUTORIAL.md](TUTORIAL.md).
 
+## Wire Tests
+
+The checks above, automated: a Python BACnet client (the Peer) drives the running
+example over BACnet/IP from outside it. Python 3 standard library only. They are
+the C++ edition's Wire Tests, unchanged except that `--exe` takes a command line
+(`tests/launch.py`), so they prove the two editions behave the same.
+
+| Script | What it proves |
+|---|---|
+| `discovery_test.py` | Who-Is, the Device's `Object_List`, then for every object its `Property_List` and a ReadProperty of every property it lists - every read comes back as a value. |
+| `commanding_test.py` | Commands each output at two priorities; `Present_Value`, `Priority_Array` and `Current_Command_Priority` follow the winning command, and the feedback input follows it too (the B-SA Profile Function, which a B-ASC includes). |
+| `failure_modes_test.py` | A disconnected valve (`no-output`, FAULT, command accepted but not obeyed), out-of-range writes, a write to an input. |
+| `dcc_test.py` | **The B-ASC Profile Function.** With `--dcc-password`: the heartbeat runs; wrong / missing password and deprecated `disable` are refused and it keeps running; `disable-initiation` stops it while ReadProperty, WriteProperty and Who-Is are still answered; `enable` resumes it; a 1-minute `disable-initiation` ends by itself. About 2.5 minutes. |
+
+The heartbeat is a subnet broadcast. On Linux/macOS `dcc_test.py` hears it on the
+wire; on Windows a second socket cannot share the example's port, so there it
+counts the example's own `TX ... (broadcast) ... I-Am` console lines (on Linux it
+checks both). Build (`npm install && npm run build`), then run them all:
+
+```bash
+python3 tests/run_wire_tests.py                 # Linux/macOS: starts "node dist/main.js"
+python tests\run_wire_tests.py --port 47821     # Windows
+```
+
+It ends with `ALL WIRE TESTS PASSED` (exit 0), after about 4 minutes.
+`--exe "<command>"` starts the example some other way (e.g.
+`--exe "npx tsx main.ts"`). CI runs it on Linux after the smoke test.
+[tests/README.md](tests/README.md) says what each check proves.
+
+
 ## The BACnet profile example series
 
 <!-- PROFILE-TABLE:BEGIN (generated from cas-bacnet-stack-examples/docs/profile-table.md - do not edit here) -->
-The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-2024 Annex L, and there is one example repository per profile. Pick the profile your device claims, then the language you build in. "Ask" means the example hasn't been built yet for that language - [contact Chipkin](https://store.chipkin.com/contact-us) if you need one.
+There is one example repository per standardized device profile in ASHRAE 135-2024 Annex L. An example marked ⛔ is blocked: the stack cannot yet perform that profile's function through its customer interface, and the example's README says what it does today. Pick the profile your device claims, then the language you build in. "Ask" means the example hasn't been built yet for that language - [contact Chipkin](https://store.chipkin.com/contact-us) if you need one.
 
 ### Controllers (Annex L.4)
 
@@ -303,7 +482,7 @@ The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-20
 
 | Profile | C++ | Node.js | C# | Rust | Python | Go |
 |---|---|---|---|---|---|---|
-| **B-AS** Authorization Server | [B-AS-CPP](https://github.com/chipkin/BACnetProfileExample-B-AS-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-AS** Authorization Server | [B-AS-CPP](https://github.com/chipkin/BACnetProfileExample-B-AS-CPP) ⛔ blocked on [stack #2043](https://github.com/chipkin/cas-bacnet-stack/issues/2043) | Ask | Ask | Ask | Ask | Ask |
 
 ### Miscellaneous (Annex L.7, combinable with any one family)
 
@@ -311,10 +490,10 @@ The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-20
 |---|---|---|---|---|---|---|
 | **B-BBMD** Broadcast Management Device | [B-BBMD-CPP](https://github.com/chipkin/BACnetProfileExample-B-BBMD-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-ACDC** Access Control Door Controller | [B-ACDC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACDC-CPP) | Ask | Ask | Ask | Ask | Ask |
-| **B-ACCR** Access Control Credential Reader | [B-ACCR-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACCR-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-ACCR** Access Control Credential Reader | [B-ACCR-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACCR-CPP) ⛔ blocked on [stack #3934](https://github.com/chipkin/cas-bacnet-stack/issues/3934) | Ask | Ask | Ask | Ask | Ask |
 | **B-RTR** Router | [B-RTR-CPP](https://github.com/chipkin/BACnetProfileExample-B-RTR-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-GW** Gateway | [B-GW-CPP](https://github.com/chipkin/BACnetProfileExample-B-GW-CPP) | Ask | Ask | Ask | Ask | Ask |
-| **B-DAP** Device Address Proxy | [B-DAP-CPP](https://github.com/chipkin/BACnetProfileExample-B-DAP-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-DAP** Device Address Proxy | [B-DAP-CPP](https://github.com/chipkin/BACnetProfileExample-B-DAP-CPP) ⛔ blocked on [stack #2032](https://github.com/chipkin/cas-bacnet-stack/issues/2032) | Ask | Ask | Ask | Ask | Ask |
 | **B-SCHUB** BACnet/SC Hub | [B-SCHUB-CPP](https://github.com/chipkin/BACnetProfileExample-B-SCHUB-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-GENERAL** General device (Annex L.8) | *(satisfied by every example above)* | — | — | — | — | — |
 
@@ -342,14 +521,15 @@ Client-side profiles.
 | **B-EWS** Elevator Workstation | planned | — | — | — | — | — |
 | **B-AEWS** Advanced Elevator Workstation | planned | — | — | — | — | — |
 
-🚧 = in progress. "Ask" = not yet built for that language; contact Chipkin if you need it. Profile definitions: ANSI/ASHRAE 135-2024 Annex L. BIBB definitions: Annex K. Get the stack: <https://store.chipkin.com/services/stacks/bacnet-stack>.
+🚧 = in progress. ⛔ = Blocked Example (blocked on the named stack gap). "Ask" = not yet built for that language; contact Chipkin if you need it. Profile definitions: ANSI/ASHRAE 135-2024 Annex L. BIBB definitions: Annex K. Get the stack: <https://store.chipkin.com/services/stacks/bacnet-stack>.
 <!-- PROFILE-TABLE:END -->
 
 ## References
 
 - **ANSI/ASHRAE Standard 135** (BACnet) - the protocol standard. Object model
-  (Clause 12), services (Clause 15), BACnet/IP (Annex J), device profiles
-  (Annex L). Purchase / preview via the [ASHRAE store](https://www.ashrae.org/technical-resources/standards-and-guidelines).
+  (Clause 12), services (Clause 16 - DeviceCommunicationControl is 16.1),
+  BACnet/IP (Annex J), device profiles (Annex L). Purchase / preview via the
+  [ASHRAE store](https://www.ashrae.org/technical-resources/standards-and-guidelines).
 - **What is BACnet?** - Chipkin's introduction:
   <https://docs.chipkin.com/protocols/bacnet/>.
 - **CAS BACnet Stack** - product page and documentation:

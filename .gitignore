@@ -1,3 +1,22 @@
 node_modules/
 dist/
 *.log
+
+# The CAS BACnet Stack binary is never committed and never released: the Node
+# addon (and any stack library) is built locally from the submodule by
+# `npm install`. Cover every name it can take.
+*.node
+*.dll
+*.so
+*.so.*
+*.dylib
+*.lib
+*.a
+*.exp
+*.pdb
+build/
+prebuilds/
+
+# Python (the Wire Tests)
+__pycache__/
+*.pyc

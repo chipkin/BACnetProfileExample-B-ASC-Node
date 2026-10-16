@@ -19,9 +19,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # windows-2022, not windows-latest: newer images carry Visual Studio 18,
-        # which npm's bundled node-gyp cannot detect ("unknown version undefined");
-        # the stack's supported Windows toolset is VS 2022 (v143).
+        # windows-2022: Visual Studio 2022 (v143), the toolset the stack's own
+        # workflows build with. (Node 24.21's npm, node-gyp 12, also finds
+        # Visual Studio 2026 on newer images.)
         os: [windows-2022, ubuntu-latest]
     steps:
       # The stack's MSVC intermediate paths mirror its source tree - without
@@ -37,7 +37,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # The stack's Node package requires >=24.21.0 <25.
+          node-version: 24.21
 
       # -frtti: node-gyp defaults to -fno-rtti, which breaks the Linux addon
       # build - same env the stack's own workflows use.
@@ -49,13 +50,13 @@ jobs:
           npm_config_cflags: -frtti
         run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Typecheck and build
+        run: npm run build
 
       - name: Smoke test (device must come up and stay up)
         shell: bash
         run: |
-          npx tsx main.ts --port 47821 > smoke.log 2>&1 &
+          node dist/main.js --port 47821 < /dev/null > smoke.log 2>&1 &
           APP_PID=$!
           for i in $(seq 1 30); do
             grep -q "ready" smoke.log && break
@@ -70,6 +71,10 @@ jobs:
           echo "OK - device came up and stayed up"
           cat smoke.log
 
+      - name: Wire Tests (Linux)
+        if: runner.os == 'Linux'
+        run: python3 tests/run_wire_tests.py --port 47821
+
   release:
     name: Publish GitHub Release
     needs: build
@@ -79,6 +84,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # Source only. The CAS BACnet Stack binary (the addon `.node`, or any
+      # `.dll` / `.so`) is never a release asset: users build it from the
+      # submodule with `npm install`. Do not add `files:` here.
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true

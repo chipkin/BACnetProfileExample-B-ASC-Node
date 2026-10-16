@@ -28,6 +28,14 @@ export interface ReceivedDatagram {
 export class SimpleUDP {
     private socket: dgram.Socket | null = null;
     private readonly receiveQueue: ReceivedDatagram[] = [];
+    private boundPort = 0;
+
+    /**
+     * Called (if set) every time a datagram is queued. The main loop uses it to
+     * run BACnetStack_Tick() as soon as a request arrives instead of waiting for
+     * its next timer - see "The main loop" in main.ts.
+     */
+    onDatagramQueued: (() => void) | null = null;
 
     /**
      * Bind the socket. Resolves once listening; rejects on bind failure (for
@@ -35,25 +43,38 @@ export class SimpleUDP {
      */
     Setup(port: number): Promise<void> {
         return new Promise((resolve, reject) => {
-            const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
-            socket.once("error", (err) => {
+            // Windows: no SO_REUSEADDR, so a second device on the same port fails to
+            // bind instead of silently sharing it (the C++ SimpleUDP asks for
+            // SO_EXCLUSIVEADDRUSE there). Linux/macOS: SO_REUSEADDR, as the C++
+            // edition sets, so a test listener can share the port to watch broadcasts.
+            const socket = dgram.createSocket({ type: "udp4", reuseAddr: process.platform !== "win32" });
+            socket.once("error", (bindError) => {
                 socket.close();
-                reject(err);
+                reject(bindError);
             });
-            socket.on("message", (message, rinfo) => {
+            socket.on("message", (message, remoteInfo) => {
                 // Copy defensively: dgram reuses buffers between events.
                 this.receiveQueue.push({
                     message: Buffer.from(message),
-                    fromIp: rinfo.address,
-                    fromPort: rinfo.port,
+                    fromIp: remoteInfo.address,
+                    fromPort: remoteInfo.port,
                 });
+                if (this.onDatagramQueued !== null) {
+                    this.onDatagramQueued();
+                }
             });
             socket.bind(port, () => {
                 socket.setBroadcast(true); // I-Am goes to the subnet broadcast
                 this.socket = socket;
+                this.boundPort = port;
                 resolve();
             });
         });
+    }
+
+    /** The UDP port this socket is bound to (0 before Setup()). */
+    Port(): number {
+        return this.boundPort;
     }
 
     /** The next queued inbound datagram, or undefined if none arrived. */
@@ -63,18 +84,21 @@ export class SimpleUDP {
 
     /**
      * Send one datagram. Fire-and-forget by design: UDP gives no delivery
-     * guarantee anyway, so a send error is logged, not thrown - same behavior
-     * as the C++ SimpleUDP::Send.
+     * guarantee anyway, so a send error is logged, not thrown - same behaviour
+     * as the C++ SimpleUDP::Send. The message is copied first, because the
+     * stack reuses its outgoing buffer and dgram sends asynchronously.
      */
-    Send(message: Buffer, toIp: string, toPort: number): void {
+    Send(message: Buffer, toIp: string, toPort: number): number {
         if (this.socket === null) {
-            return;
+            return 0;
         }
-        this.socket.send(message, toPort, toIp, (err) => {
-            if (err !== null) {
-                console.error(`Error: UDP send to ${toIp}:${toPort} failed: ${err.message}`);
+        const datagram = Buffer.from(message);
+        this.socket.send(datagram, toPort, toIp, (sendError) => {
+            if (sendError !== null) {
+                console.error(`Error: UDP send to ${toIp}:${toPort} failed: ${sendError.message}`);
             }
         });
+        return datagram.length;
     }
 
     /** Close the socket (the process cannot exit while it is open). */

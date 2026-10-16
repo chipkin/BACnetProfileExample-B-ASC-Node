@@ -6,6 +6,80 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - unreleased
+
+Profile-functional (series bar): a faithful port of
+`BACnetProfileExample-B-ASC-CPP` v1.4.0. The controller performs the B-ASC
+Profile Function - ANSI/ASHRAE 135-2024 Annex L.4.3, "Ability to allow
+modification of some or all of its BACnet objects by another device" and
+"Ability to respond to communication control messages" - with something for
+communication control to silence, and shows Failure Modes. The BACnet Surface
+is unchanged (DS-RP-B, DS-WP-B, DM-DCC-B, DM-DDB-B, DM-DOB-B; the same eight
+objects).
+
+### Added
+
+- **I-Am heartbeat** (`main.ts` section 2d, `HeartbeatTick()`): an unsolicited
+  I-Am broadcast every 5 s. Under DeviceCommunicationControl
+  `disable-initiation` the stack refuses to send it (cl. 16.1.2); `enable`, or
+  the end of the request's time duration, resumes it. The example keeps no DCC
+  state of its own.
+- **Actuator Simulation** (`main.ts` section 1b, `ActuatorSimulationTick()`,
+  labelled Simulation in the README): once a second the heating valve moves
+  Analog Input 1 up to 1.0 C toward the winning Analog Output 1 setpoint
+  (`ResolvedCommand()`, cl. 19.2), Binary Input 1 and Multi-State Input 1 take
+  the winning Binary / Multi-State Output 1 commands. Before, the inputs were
+  constants.
+- **Analog Output 1** `Min_Pres_Value` 10.0 / `Max_Pres_Value` 30.0 (an
+  out-of-range setpoint gets `value-out-of-range`) and `Reliability`
+  (`no-output` while the simulated valve actuator is disconnected; the stack
+  derives `Status_Flags` FAULT from it). Test-only hook: the environment
+  variable `CAS_EXAMPLE_TEST_ACTUATOR_FAULT_FILE` names a file, and the valve is
+  disconnected while that file exists.
+- **`--dcc-password <string>`**: the DeviceCommunicationControl password is set
+  at start-up (default empty = any request accepted); the start-up banner says
+  that one is set, never what it is. The callback compares the request's
+  password octets by length first, then bytes.
+- **Wire Tests** (`tests/`, copied from the C++ reference: discovery,
+  commanding, failure modes, DCC) and the shared `wiretest/` 0.7.0 harness,
+  vendored verbatim (byte-identical to B-ASC-CPP's and B-SS-CPP's). The only
+  addition is `tests/launch.py` (as B-SS-Node's): `--exe` takes a command line,
+  default `node dist/main.js`. Windows, 3 runs in a row: 83/83 checks each
+  (discovery 14/14, commanding 31/31, failure modes 22/22, DCC 16/16), no
+  `[RETRY]` lines. Mutation-checked (rebuilt `dist/main.js` hash confirmed
+  changed each time): `--dcc-password` not parsed, the lowest priority winning,
+  the valve never disconnecting, and the heartbeat not called each fail the
+  same checks as in the C++ reference's table (P2, A3, A7, H1).
+- `.npmrc` `bacnet_testtool=0`: `npm install` builds the stack's production
+  addon (customer interface only).
+- `npm run build` (tsc to `dist/`); `npm start` runs `node dist/main.js`.
+- `TODO.md`: an adapter defect found while porting (not filed).
+
+### Changed
+
+- **Stack Pin** `6.x-TestTool` @ `4a69c9eb` -> `6.x` @ `64b2cfac5` (CAS BACnet
+  Stack 6.0.23, Node package 6.1.2), consumed in place as an npm workspace.
+  **Protocol_Revision 24 -> 30**.
+- **Node.js 24.21+ (<25)**, the stack package's `engines` (was `>=18.20.8`);
+  `tsx` is gone.
+- `common/` 1.0.0 -> 3.0.0, copied verbatim from B-SS-Node (see
+  `common/CHANGELOG.md`): RX/TX console lines (the DCC Wire Test counts the
+  heartbeat from them on Windows), the broadcast rules of the send callback,
+  primary-interface discovery, the three-line version banner, `--dcc-password`
+  in `--help`, the interactive keys also read from a piped stdin (how the Wire
+  Tests stop the example), and CLI parsing that warns instead of exiting.
+- `main.ts` rewritten section by section from B-ASC-CPP v1.4.0 `main.cpp`:
+  the commandable outputs keep their Priority_Array in a `Commandable` record
+  and the stack resolves `Present_Value`; Analog Output 1 is a degrees-Celsius
+  setpoint (`Units` was `percent`) with `Relinquish_Default` 20.0; the setters
+  validate ranges and log the effective priority. The up/down keys disturb the simulated temperature; the
+  valve brings it back.
+- `.gitignore` covers every stack binary name (`*.node`, `*.dll`, `*.so*`,
+  ...); the release workflow publishes source only, never the addon.
+- README, TUTORIAL, AGENTS.md, `docs/PICS.md` and `docs/objects.json` follow
+  the C++ reference (the scenario, the Simulation, the heartbeat, Wire Tests,
+  the version line, the binary-never-released rule).
+
 ## [1.0.2] - unreleased
 
 ### Changed

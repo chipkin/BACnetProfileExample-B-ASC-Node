@@ -130,25 +130,21 @@ export const NOTIFY_TYPE_EVENT = 1;
 //    Full list: submodules/cas-bacnet-stack/source/BACnetErrorCode.h
 //    A SetProperty* callback writes one of these to its errorCode out-Buffer
 //    (errorCode.writeUInt32LE(code, 0)) and returns false to reject a write
-//    with that BACnet Error-PDU.
+//    with that BACnet Error-PDU. A GetProperty* callback (stack issue #974)
+//    may do the same to name the error a read fails with - only where the
+//    device knows the read is wrong (an out-of-range State_Text index).
 export const ERROR_CODE_PASSWORD_FAILURE = 26;
 export const ERROR_CODE_VALUE_OUT_OF_RANGE = 37;
+export const ERROR_CODE_INVALID_ARRAY_INDEX = 42;
 export const ERROR_CODE_OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED = 45;
 
-// -- Transport network type (BACnetPacket::NetworkType, for the send/receive
-//    callbacks and SendIAm).
-//    Full list: submodules/cas-bacnet-stack/source/BACnetPacket.h
-//    NOTE: this is a DIFFERENT enumeration from the Network Port object's
-//    network type below (see the GOTCHA in CASBACnetStackDLL.h).
-export const NETWORK_TYPE_IP = 0;
-
 // -- Network Port object network type (BACnetNetworkType enumeration, used by
-//    BACnetStack_AddNetworkPortObjectWithNetworkNumber).
+//    BACnetStack_AddNetworkPortObject).
 //    Full list: submodules/cas-bacnet-stack/source/BACnetNetworkType.h
 export const NETWORK_PORT_NETWORK_TYPE_IPV4 = 5;
 
 // -- Network Port object protocol level (BACnetProtocolLevel enumeration, used
-//    by BACnetStack_AddNetworkPortObjectWithNetworkNumber).
+//    by BACnetStack_AddNetworkPortObject).
 //    Full list: submodules/cas-bacnet-stack/source/BACnetProtocolLevel.h
 export const NETWORK_PORT_PROTOCOL_LEVEL_BACNET_APPLICATION = 2;
 // The lowest protocol layer references this sentinel instead of another port.
@@ -167,3 +163,7 @@ export const NETWORK_NUMBER_QUALITY_CONFIGURED = 3;
 //    defined by ANSI/ASHRAE 135 Clause 20.2.9; see the stack's handling in
 //    submodules/cas-bacnet-stack/source/BACnetPrimitiveCharSTRING.h
 export const CHARACTER_STRING_ENCODING_UTF8 = 0;
+
+// -- The "default/single Network Port" sentinel the transport callbacks accept
+//    (BACNET_NETWORK_PORT_DEFAULT in CASBACnetStackDLL.h).
+export const BACNET_NETWORK_PORT_DEFAULT = 4194303;

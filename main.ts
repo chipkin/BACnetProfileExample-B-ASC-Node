@@ -1,34 +1,98 @@
 // SPDX-License-Identifier: CC0-1.0
-// Public-domain example code (CC0) - see LICENSE.
-
-// BACnet B-ASC (Application Specific Controller) example - Node.js
+// Public-domain example code (CC0) - see LICENSE. The CAS BACnet Stack itself is
+// a separate, commercially licensed product and is not covered by CC0.
 // =============================================================================
-// A complete, minimal BACnet/IP device implementing the B-ASC device profile of
-// ANSI/ASHRAE 135 Annex L: an Application Specific Controller is a B-SA (Smart
-// Actuator) plus DeviceCommunicationControl. In BIBB terms this example
-// executes DS-RP-B, DS-WP-B, DM-DCC-B, DM-DDB-B and DM-DOB-B - and nothing
-// more. No COV, no alarms, no scheduling, no trending, no ReadPropertyMultiple:
-// implementing exactly one profile is the point of this example.
+// BACnet Profile Example - B-ASC (BACnet Application Specific Controller) - Node.js
 //
-// This is the Node.js edition of BACnetProfileExample-B-ASC-CPP - same
-// objects, same names, same section layout, same function names - so you can
-// diff the two side by side. The systematic differences are the language's:
-// out-parameters arrive as Buffers (value.writeFloatLE(...) instead of
-// *value = ...), and the main loop is a timer instead of a while().
+// This example implements the BACnet "B-ASC" (Application Specific Controller)
+// device profile with the CAS BACnet Stack. It is the B-SA (Smart Actuator)
+// example plus one device-management capability: it answers
+// DeviceCommunicationControl.
 //
-// Layout (same four numbered sections as the C++ edition):
-//   1. Configuration - identity, objects, and the commandable-output model
-//   2. Get callbacks - the stack PULLS every property value it serves
-//   2b. Set callbacks - WriteProperty lands here (priority array semantics)
-//   2c. DCC callback - the B-ASC addition (DeviceCommunicationControl)
-//   3. main() - load, configure, announce, tick
+// "A B-ASC is a controller with limited resources relative to a B-AAC. It is
+// intended for use in a specific application and supports limited
+// programmability." (ANSI/ASHRAE 135-2024, Annex L.4.3). What it adds to a B-SA
+// is one Device and Network Management line of that clause: "Ability to respond
+// to communication control messages". Its Profile Function: a controller that
+// is commanded like a B-SA, and that a management station can silence and
+// un-silence. The BIBBs:
+//
+//     DS-RP-B   - respond to ReadProperty requests,
+//     DS-WP-B   - allow other devices to WriteProperty its objects, and
+//     DM-DCC-B  - respond to DeviceCommunicationControl messages (NEW): a
+//                 management station can tell the device to stop/resume talking,
+//                 optionally for a time period and behind a password.
+//
+// plus discovery (Who-Is/I-Am, Who-Has/I-Have). It does NOT require COV, alarms,
+// scheduling, or trending, so this example leaves those off.
+//
+// This is the Node.js edition of BACnetProfileExample-B-ASC-CPP - same objects,
+// same names, same section layout, same function names - so you can diff the
+// two side by side, and a client cannot tell them apart on the wire. The
+// systematic differences are the language's: out-parameters arrive as Buffers
+// (value.writeFloatLE(...) instead of *value = ...), and the main loop is a
+// timer instead of a while().
+//
+// SOMETHING TO SILENCE. "Disable initiation" only means something if the device
+// initiates. Answering Who-Is is not initiating (cl. 16.1.2 exempts it), so this
+// example announces itself with an unsolicited I-Am every HEARTBEAT_SECONDS
+// (section 2d) - I-Am is the one service DM-DDB-B has the device initiate, so the
+// BACnet Surface does not grow. While a DeviceCommunicationControl
+// DISABLE_INITIATION is in force the stack refuses to send it; the heartbeat
+// stops, and resumes on ENABLE or when the time duration runs out.
+//
+// The device keeps the same objects as B-SA - three commandable outputs a client
+// drives with WriteProperty, and three read-only inputs that are their FEEDBACK.
+// Each object has a colour name (the convention shared across this example
+// series):
+//
+//     Device 389003            "Chipkin Example B-ASC"     (instance configurable with --deviceID)
+//     Analog Input  1          "Bronze"      (REAL, degrees Celsius; read-only - the temperature the valve produces)
+//     Binary Input  1          "Emerald"     (active / inactive; read-only - the relay's feedback contact)
+//     Multi-State Input 1      "Hot Pink"    (state 1..3; read-only - the speed the drive is running at)
+//     Analog Output 1          "Chartreuse"  (REAL setpoint, 10.0 .. 30.0 C; WRITABLE, commandable)
+//     Binary Output 1          "Fuchsia"     (active / inactive relay; WRITABLE, commandable)
+//     Multi-State Output 1     "Indigo"      (speed 1..3; WRITABLE, commandable)
+//     Network Port 1           "Vermilion"   (the BACnet/IP port - required)
+//
+// SIMULATION. As in B-SA, section 1b is an actuator Simulation that stands in for
+// the equipment: a heating valve moves the temperature toward the winning Analog
+// Output 1 command, a relay follows Binary Output 1, a drive follows Multi-State
+// Output 1, and each reports back through its input. It is NOT part of the
+// BACnet Surface. Its Failure Mode is a disconnected valve actuator (Analog
+// Output 1 Reliability NO_OUTPUT, Status_Flags FAULT), reachable only through a
+// test-only hook (ACTUATOR_FAULT_FILE_VARIABLE).
+//
+// Output objects are COMMANDABLE: their Present_Value is driven by a 16-slot
+// BACnet Priority_Array. A WriteProperty(Present_Value, value, priority) sets a
+// slot; writing NULL relinquishes it; the stack reports the highest-priority
+// non-null slot (or Relinquish_Default) as the effective Present_Value. The app
+// stores the priority array (see the Commandable interface below) and serves it;
+// the stack computes Present_Value from it.
+//
+// To be a conformant BACnet device (Protocol_Revision 30) each object must
+// expose its full set of REQUIRED properties. Most are generated by the stack
+// (Object_Identifier, Object_Type, Status_Flags, Object_List, Protocol_*).
+// Event_State is NOT generated - with no alarming configured it simply reads its
+// datatype default of normal(0), correct by coincidence, not because the stack
+// computes it. The handful that the application must supply are served by the
+// Get*Property callbacks below, and a few are turned on with SetPropertyEnabled.
+//
+// Interactive keys (handled by the shared helper): h = help, q = quit,
+// up/down = disturb the simulated temperature (Analog Input 1) by +/-1.1; the
+// valve then brings it back to the setpoint. Command line: --port <n>,
+// --deviceID <n>, --dcc-password <string>.
+//
+// All the UDP/stack plumbing lives in common/CASExampleHelper so this file can
+// stay focused on the BACnet logic.
 // =============================================================================
 
+import * as fs from "node:fs";
 import {
     LoadBACnetFunctions,
     CASBACnetStackAdapter_LastError,
     BACnetStack_AddDevice,
-    BACnetStack_AddNetworkPortObjectWithNetworkNumber,
+    BACnetStack_AddNetworkPortObject,
     BACnetStack_AddObject,
     BACnetStack_GetAPIMajorVersion,
     BACnetStack_GetAPIMinorVersion,
@@ -50,12 +114,14 @@ import {
     BACnetStack_SetServiceEnabled,
     BACnetStack_Tick,
 } from "@chipkin/cas-bacnet-stack";
-import * as readline from "node:readline";
 import {
     BACNET_IP_MODE_NORMAL,
     CHARACTER_STRING_ENCODING_UTF8,
+    DCC_DISABLE,
+    DCC_DISABLE_INITIATION,
+    DCC_ENABLE,
     ENGINEERING_UNITS_DEGREES_CELSIUS,
-    ENGINEERING_UNITS_PERCENT,
+    ERROR_CODE_INVALID_ARRAY_INDEX,
     ERROR_CODE_OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     ERROR_CODE_PASSWORD_FAILURE,
     ERROR_CODE_VALUE_OUT_OF_RANGE,
@@ -103,118 +169,223 @@ import {
     SERVICE_WRITE_PROPERTY,
 } from "./common/CASBACnetStackExampleConstants";
 import {
+    DiscoverPrimaryIPv4,
     GetLocalIPv4,
     HandleHelpAndVersionArgs,
+    KeyCommand,
+    ParseDccPasswordArg,
     ParseDeviceIdArg,
     ParsePortArg,
+    PrintHelp,
     PrintVersion,
     RegisterCommonCallbacks,
     SendIAm,
+    StartKeyInput,
 } from "./common/CASExampleHelper";
 import { SimpleUDP } from "./common/SimpleUDP";
 
-// =============================================================================
-// 1. Configuration
-// =============================================================================
-// >>> CHANGE ALL OF THIS BEFORE YOU SHIP <<<
-// The device identity below belongs to this EXAMPLE, not to your product.
-// Vendor ID 389 is Chipkin Automation Systems' - get your own vendor ID from
-// ASHRAE (https://bacnet.org/assigned-vendor-ids/) and pick your own device
-// instance (it must be unique on the whole BACnet internetwork).
-
+// -----------------------------------------------------------------------------
+// 1. Example + device configuration
+// -----------------------------------------------------------------------------
 const APP_NAME = "BACnet B-ASC (Application Specific Controller) Example - Node";
-const APP_VERSION = "1.0.2";
+const APP_VERSION = "1.1.0";
 
-// Firmware_Revision (44) names the underlying CAS BACnet Stack, not this
-// app - it is computed once at startup from the stack's own real version
-// numbers (after LoadBACnetFunctions() succeeds), not per-property-read.
+// The device instance. BACnet requires this to be configurable, so it defaults
+// to 389003 and can be overridden on the command line with --deviceID.
+let g_deviceInstance = 389003;
+
+// ---- Device identity: CHANGE ALL OF THIS BEFORE YOU SHIP --------------------
+// Everything in this block is read by clients and shown to the operator in every
+// discovery tool on the network. Left as-is, your product will appear on a real
+// site announcing itself as a Chipkin demo. None of it is cosmetic:
+// Object_Name must be unique across the BACnet internetwork, and Model_Name /
+// Vendor_Identifier are what a building operator uses to identify your device.
+//
+// This block is the ship checklist. Every constant below has a note saying what
+// to change it to; nothing here is safe to leave at its example value.
+// -----------------------------------------------------------------------------
+
+// Your BACnet Vendor Identifier. 389 = Chipkin Automation Systems; change this
+// to YOUR company's vendor ID before shipping a product. Vendor IDs are assigned
+// by ASHRAE - request one (free) at https://bacnet.org/assigned-vendor-ids/.
+// Update VENDOR_NAME below to match.
+const VENDOR_IDENTIFIER = 389;
+
+// The Device object's Object_Name.
+//
+// THIS IS THE ONE THAT WILL BITE YOU. Object_Name must be unique across the
+// whole BACnet internetwork, and here it is a constant. The device instance is
+// runtime-configurable via --deviceID, so it is easy to ship two units,
+// configure their instances correctly, and still have BOTH announce Object_Name
+// "Chipkin Example B-ASC" - a spec violation, and a hard BTL failure. In a real
+// product Object_Name must be per-unit configurable too: derive it from a serial
+// number, DIP switches, a config file, or add a --deviceName argument.
+const DEVICE_NAME = "Chipkin Example B-ASC";
+
+// The Device object's Description. Change it to what YOUR device actually is;
+// this string describes this tutorial.
+const DEVICE_DESCRIPTION =
+    "Chipkin CAS BACnet Stack example - B-ASC (Application Specific Controller) " +
+    "profile. Demonstrates DS-RP-B + DS-WP-B + DM-DCC-B: ReadProperty, " +
+    "WriteProperty, and DeviceCommunicationControl with read-only sensor inputs " +
+    "and commandable outputs.";
+
+// Device identity strings (read by clients, and used to populate I-Am).
+//   VENDOR_NAME - your company name; it must match VENDOR_IDENTIFIER above.
+//   MODEL_NAME  - your model designation. This is what a building operator reads
+//                 to identify your device in a discovery tool.
+const VENDOR_NAME = "Chipkin Automation Systems";
+const MODEL_NAME = "CAS BACnet Stack Example - B-ASC";
+
+// DeviceCommunicationControl password. A management station may include a password
+// with a DeviceCommunicationControl (or ReinitializeDevice) request; the device
+// accepts the command only if it matches. Empty = accept any request (no password
+// required). The default is empty; `--dcc-password <string>` sets it at start-up
+// (main() below), so the password Failure Mode can be shown without a code
+// change. In your product, set it from your own configuration - and remember it
+// crosses the wire in PLAINTEXT: it is a guard against accidents, not a security
+// boundary. See the DeviceCommunicationControl callback below for the compare.
+const DEFAULT_DCC_PASSWORD = ""; // "" = no password required
+let g_dccPassword = DEFAULT_DCC_PASSWORD;
+
+// Application_Software_Version (12) is just APP_VERSION - one source of truth,
+// so it can never drift from what --version/the startup banner prints.
+//
+// Firmware_Revision (44) is meant to name the underlying platform/stack, not
+// this example's own version - built at start-up from the CAS BACnet Stack's own
+// BACnetStack_GetAPIMajorVersion()/etc. (the same 4 calls
+// common/CASExampleHelper.ts's PrintVersion() uses for the startup banner's
+// "CAS BACnet Stack version: X.Y.Z.W" line), so it can never go stale either -
+// see main(), where it is filled in right after LoadBACnetFunctions() succeeds.
 let g_firmwareRevision = "";
 
-// Every example in this series has its own default device instance (B-ASC =
-// 389003, see the series' device-instance table) so several examples can run
-// on one subnet. Overridable at runtime with --deviceID, as BACnet requires.
-let g_deviceInstance = 389003;
-const VENDOR_IDENTIFIER = 389; // Chipkin Automation Systems - replace with the vendor ID ASHRAE assigns you.
-// Object_Name must be UNIQUE across the whole BACnet internetwork - two
-// devices with the same name is a spec violation, and it is the exact,
-// silent failure mode this series warns about elsewhere in this file (see
-// the "SILENT TRAP" comments below and TUTORIAL.md). Here it is a
-// compile-time constant, which is fine for a single running copy of this
-// example; a real product must make it per-unit configurable (serial
-// number, DIP switches, a config file, or a --deviceName argument) so two
-// units never boot with the same name.
-const DEVICE_NAME = "Chipkin Example B-ASC"; // replace with your product's per-unit device name.
-const DEVICE_DESCRIPTION = "BACnet B-ASC (Application Specific Controller) example - Node.js"; // replace with your product's description.
-const VENDOR_NAME = "Chipkin Automation Systems"; // replace with your company's name.
-const MODEL_NAME = "CAS BACnet Stack B-ASC Example"; // replace with your product's model name.
+// The device instance above (g_deviceInstance, default 389003, --deviceID
+// overrides) must also be unique on the internetwork; BACnet requires it to be
+// configurable, so keep the --deviceID override rather than hard-coding it.
 
-// DM-DCC-B: the password a client must present with DeviceCommunicationControl.
-// Empty string = accept requests that carry no password (and requests carrying
-// one are still compared - see the DCC callback).
-const DCC_PASSWORD = "";
+// The sensor objects (all instance 1) and their colour names.
+const ANALOG_INPUT_INSTANCE = 1; //       "Bronze"
+const BINARY_INPUT_INSTANCE = 1; //       "Emerald"
+const MULTI_STATE_INPUT_INSTANCE = 1; //  "Hot Pink"
+const MULTI_STATE_INPUT_NUMBER_OF_STATES = 3;
 
-// Object instances - instances start at 1 in every example of this series.
-const ANALOG_INPUT_INSTANCE = 1; //      "Bronze"     - room temperature, read-only
-const BINARY_INPUT_INSTANCE = 1; //      "Emerald"    - a contact, read-only
-const MULTI_STATE_INPUT_INSTANCE = 1; // "Hot Pink"   - a 3-state selector, read-only
-const ANALOG_OUTPUT_INSTANCE = 1; //     "Chartreuse" - commandable REAL
-const BINARY_OUTPUT_INSTANCE = 1; //     "Fuchsia"    - commandable active/inactive
-const MULTI_STATE_OUTPUT_INSTANCE = 1; // "Indigo"    - commandable state 1..3
-const NETWORK_PORT_INSTANCE = 1; //      "Vermilion"  - the BACnet/IP port itself
-const MAX_APDU_LENGTH = 1476; // BACnet/IP APDU length (1497-byte frame minus headers)
+// The Network Port object - every BACnet device must have one. It represents
+// the BACnet/IP port this device communicates on.
+const NETWORK_PORT_INSTANCE = 1; //       "Vermilion"
+const MAX_APDU_LENGTH = 1476; //          BACnet/IP APDU length
 
-// Input values (series-standard starting values). The arrow keys nudge the
-// Analog Input at runtime so you can watch the value change from a client.
-let g_analogInput1Value = 21.5; // degrees Celsius
-const g_binaryInput1Value = 0; // 0 = inactive
-const g_multiStateInput1Value = 1; // state 1 ("On")
-const MULTI_STATE_TEXT = ["On", "Off", "Auto"]; // State_Text, 1-based on the wire
-
-// Networking (served by the Network Port object; filled in main()).
-let g_udpPort = 47808;
+// BACnet/IP addressing the Network Port reports. The IP address and subnet mask
+// are filled in at start-up from the host's primary interface; the gateway is
+// left unset (0.0.0.0) for this example. The stack also uses IP_Address +
+// BACnet_IP_UDP_Port to build the port's MAC_Address automatically.
 let g_ipAddress: number[] = [0, 0, 0, 0];
 let g_ipSubnetMask: number[] = [0, 0, 0, 0];
-const g_ipDefaultGateway: number[] = [0, 0, 0, 0]; // a real product reports its real gateway
+const g_ipDefaultGateway: number[] = [0, 0, 0, 0];
+let g_bacnetIpUdpPort = 47808;
 
-// --- The commandable-output model (DS-WP-B) ---------------------------------
-// A commandable object's Present_Value is not a simple variable: it is the
-// highest-priority entry of a 16-slot Priority_Array, falling back to
-// Relinquish_Default when every slot is NULL. The APPLICATION owns this model
-// - the stack asks for the slots through the Get callbacks and delivers
-// writes/relinquishes through the Set callbacks.
+// The input objects' live values - the actuators' feedback. The Get callbacks
+// only ever hand these back; the Simulation (section 1b) is the only thing that
+// changes them. On a real device your feedback sampling updates them instead.
+// Analog Input 1 is a REAL (32-bit float) on the wire; Math.fround keeps this
+// number a float32 too, so its arithmetic matches the C++ edition's float.
+let g_analogInput1Value = Math.fround(21.5); // degrees Celsius
+let g_binaryInput1Value = 0; //                 0 = inactive, 1 = active
+let g_multiStateInput1Value = 1; //             1..MULTI_STATE_INPUT_NUMBER_OF_STATES
 
+// The commandable OUTPUT objects (all instance 1) and their colour names. These
+// are inherited verbatim from B-SA, which defines this pattern for the series:
+// clients drive them with WriteProperty (DS-WP-B).
+const ANALOG_OUTPUT_INSTANCE = 1; //        "Chartreuse"
+const BINARY_OUTPUT_INSTANCE = 1; //        "Fuchsia"
+const MULTI_STATE_OUTPUT_INSTANCE = 1; //   "Indigo"
+const MULTI_STATE_OUTPUT_NUMBER_OF_STATES = 3;
+const BACNET_PRIORITY_ARRAY_SIZE = 16;
+
+// A BACnet commandable value: a 16-slot Priority_Array plus a Relinquish_Default.
+// Each slot is either null (relinquished) or holds a commanded value. The
+// resolved value (ResolvedCommand() below - the same answer the stack gives for
+// Present_Value) is what drives the output; here that is the Simulation in
+// section 1b. The values are kept as numbers and converted per object type
+// (REAL for AO, 0/1 for BO, state number for MSO).
 interface Commandable {
-    isSet: boolean[]; // 16 slots; false = NULL
-    value: number[]; // 16 slots; meaningful only where isSet
-    relinquishDefault: number;
+    isSet: boolean[]; //        is slot i (1..16) commanded?
+    value: number[]; //         the commanded value at slot i
+    relinquishDefault: number; // used when every slot is null
 }
 
-function makeCommandable(relinquishDefault: number): Commandable {
-    return { isSet: new Array(16).fill(false), value: new Array(16).fill(0), relinquishDefault };
+// Every priority slot starts null, so Present_Value reports relinquishDefault.
+function NewCommandable(relinquishDefault: number): Commandable {
+    return {
+        isSet: new Array<boolean>(BACNET_PRIORITY_ARRAY_SIZE).fill(false),
+        value: new Array<number>(BACNET_PRIORITY_ARRAY_SIZE).fill(0),
+        relinquishDefault,
+    };
 }
+const g_analogOutput = NewCommandable(20.0); //    setpoint, default 20.0 C
+const g_binaryOutput = NewCommandable(0.0); //     default inactive (0)
+const g_multiStateOutput = NewCommandable(1.0); // default state 1
 
-const g_analogOutput1 = makeCommandable(0.0);
-const g_binaryOutput1 = makeCommandable(0); // inactive
-const g_multiStateOutput1 = makeCommandable(1); // state 1
-
-/** BACnet priorities are 1..16; a write without one (priority 0) acts at 16. */
+// A WriteProperty to a commandable Present_Value carries a priority 1..16. When a
+// client omits it, BACnet uses 16 (the lowest priority) - so normalise anything
+// out of range to 16, matching the stack's own behaviour.
 function EffectivePriority(priority: number): number {
-    return priority >= 1 && priority <= 16 ? priority : 16;
+    return priority >= 1 && priority <= BACNET_PRIORITY_ARRAY_SIZE ? priority : 16;
 }
 
+// Store a commanded value at a priority slot (a WriteProperty of a value).
 function CommandWrite(c: Commandable, priority: number, value: number): void {
-    const slot = EffectivePriority(priority) - 1;
-    c.isSet[slot] = true;
-    c.value[slot] = value;
+    const p = EffectivePriority(priority);
+    c.isSet[p - 1] = true;
+    c.value[p - 1] = value;
 }
 
+// Relinquish (clear) a priority slot - i.e. a WriteProperty of NULL.
 function CommandRelinquish(c: Commandable, priority: number): void {
-    c.isSet[EffectivePriority(priority) - 1] = false;
+    const p = EffectivePriority(priority);
+    c.isSet[p - 1] = false;
 }
 
-/** Present_Value = highest-priority set slot, else Relinquish_Default. */
-function CommandRead(c: Commandable): number {
-    for (let slot = 0; slot < 16; slot++) {
+// Resolve which Commandable an (objectType, objectInstance) maps to, or null.
+function GetCommandable(objectType: number, objectInstance: number): Commandable | null {
+    if (objectType === OBJECT_TYPE_ANALOG_OUTPUT && objectInstance === ANALOG_OUTPUT_INSTANCE) {
+        return g_analogOutput;
+    }
+    if (objectType === OBJECT_TYPE_BINARY_OUTPUT && objectInstance === BINARY_OUTPUT_INSTANCE) {
+        return g_binaryOutput;
+    }
+    if (objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT && objectInstance === MULTI_STATE_OUTPUT_INSTANCE) {
+        return g_multiStateOutput;
+    }
+    return null;
+}
+
+// Is this read a single Priority_Array element (Priority_Array[1..16])? If so,
+// report whether that slot is commanded (slotIsSet) and its value (slotValue);
+// otherwise null. The typed Get callbacks use this to serve a commandable
+// object's Priority_Array and to let the stack compute Present_Value from the
+// highest non-null slot.
+function ReadPrioritySlot(
+    c: Commandable,
+    propertyIdentifier: number,
+    useArrayIndex: boolean,
+    propertyArrayIndex: number
+): { slotIsSet: boolean; slotValue: number } | null {
+    if (
+        propertyIdentifier !== PROPERTY_IDENTIFIER_PRIORITY_ARRAY ||
+        !useArrayIndex ||
+        propertyArrayIndex < 1 ||
+        propertyArrayIndex > BACNET_PRIORITY_ARRAY_SIZE
+    ) {
+        return null;
+    }
+    return { slotIsSet: c.isSet[propertyArrayIndex - 1], slotValue: c.value[propertyArrayIndex - 1] };
+}
+
+// The command that wins (cl. 19.2): the value at the highest-priority (lowest
+// numbered) commanded slot, or Relinquish_Default when every slot is null. This
+// is the value the stack reports as Present_Value, and the one an output obeys.
+function ResolvedCommand(c: Commandable): number {
+    for (let slot = 0; slot < BACNET_PRIORITY_ARRAY_SIZE; ++slot) {
         if (c.isSet[slot]) {
             return c.value[slot];
         }
@@ -222,221 +393,337 @@ function CommandRead(c: Commandable): number {
     return c.relinquishDefault;
 }
 
-/** The commandable object for a {type, instance} pair, or null. Carry the PAIR
- *  - never match on a hardcoded instance - so adding a second output later
- *  cannot silently alias the first. */
-function GetCommandable(objectType: number, objectInstance: number): Commandable | null {
-    if (objectType === OBJECT_TYPE_ANALOG_OUTPUT && objectInstance === ANALOG_OUTPUT_INSTANCE) {
-        return g_analogOutput1;
-    }
-    if (objectType === OBJECT_TYPE_BINARY_OUTPUT && objectInstance === BINARY_OUTPUT_INSTANCE) {
-        return g_binaryOutput1;
-    }
-    if (objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT && objectInstance === MULTI_STATE_OUTPUT_INSTANCE) {
-        return g_multiStateOutput1;
-    }
-    return null;
-}
+// Analog Output 1 accepts setpoints in this range, and serves it as the optional
+// Min_Pres_Value / Max_Pres_Value (cl. 12.3.12 / 12.3.13: the lowest / highest
+// number "that can be reliably used for the Present_Value"). A write outside it
+// is refused with value-out-of-range.
+const PROPERTY_IDENTIFIER_MAX_PRES_VALUE = 65;
+const PROPERTY_IDENTIFIER_MIN_PRES_VALUE = 69;
+const ANALOG_OUTPUT_MIN_PRES_VALUE = 10.0;
+const ANALOG_OUTPUT_MAX_PRES_VALUE = 30.0;
 
-// =============================================================================
-// 2. Get callbacks
-// =============================================================================
-// The stack PULLS: when a client reads a property the stack serves internally
-// (Object_List, Protocol_Services_Supported, ...) it answers alone; for the
-// values only the application knows, it calls these callbacks, routed by
-// DATATYPE - one callback per BACnet primitive type.
+// Analog Output 1's Reliability (cl. 12.3.9). NO_FAULT_DETECTED while the valve
+// actuator is connected; NO_OUTPUT ("No physical device is connected to the
+// Output object", cl. 12.1) while it is not. The stack builds the FAULT bit of
+// Status_Flags from this property by itself (cl. 12.3.7) - the example only has
+// to serve it.
+const PROPERTY_IDENTIFIER_RELIABILITY = 103;
+const RELIABILITY_NO_FAULT_DETECTED = 0;
+const RELIABILITY_NO_OUTPUT = 6;
+let g_analogOutput1Reliability = RELIABILITY_NO_FAULT_DETECTED;
+
+// -----------------------------------------------------------------------------
+// 1b. The actuator Simulation (NOT part of the BACnet Surface)
 //
-// SILENT TRAP - a `false` return usually does NOT produce a BACnet error.
-// The stack substitutes a default for everything it can invent: Object_Name
-// becomes the literal "undefined", Units becomes no-units(95). It errors only
-// for the values it refuses to invent: Present_Value, Number_Of_States,
-// Relinquish_Default, Local_Date, Local_Time, and a Network Port's
-// APDU_Length. So two half-added objects both report Object_Name "undefined" -
-// duplicate names in one device, a spec violation - and every scan tool
-// renders the device as healthy. Serve EVERY property of every object you add.
+// Stands in for the equipment the outputs drive. Once a second:
+//   - the heating valve (Analog Output 1) moves the temperature (Analog Input 1)
+//     up to 1.0 C toward the winning setpoint;
+//   - the relay's feedback contact (Binary Input 1) takes the winning Binary
+//     Output 1 command;
+//   - the drive's speed (Multi-State Input 1) takes the winning Multi-State
+//     Output 1 command;
+// and the valve actuator's connection is checked. Feedback that lags its command
+// by up to a second is what a real actuator gives you, too.
+//
+// The disconnected valve is a TEST-ONLY hook, not a feature: when the
+// environment variable named by ACTUATOR_FAULT_FILE_VARIABLE names a file, the
+// valve actuator counts as disconnected for as long as that file exists. A Wire
+// Test creates and deletes the file. While disconnected, the valve moves nothing
+// - the temperature stays where it is whatever is commanded - and Analog Output 1
+// Reliability reads NO_OUTPUT; commands are still accepted into the
+// Priority_Array, and once the file is gone the valve obeys the winning one. On a
+// real device, set Reliability from your output driver's own diagnostics (an
+// open-circuit detect, a position feedback that does not move, ...).
+// -----------------------------------------------------------------------------
+const ACTUATOR_FAULT_FILE_VARIABLE = "CAS_EXAMPLE_TEST_ACTUATOR_FAULT_FILE";
+let g_actuatorFaultFile = ""; // read once at start-up; empty = no hook
+const VALVE_MAX_CHANGE_PER_SECOND = 1.0; // degrees Celsius
 
-/** Write `text` into a CharacterString out-Buffer, clamped to the stack's
- *  maximum, and report the byte count + UTF-8 encoding. */
-function ReturnCharacterString(
-    text: string,
-    value: Buffer,
-    valueElementCount: Buffer,
-    maxElementCount: number,
-    encodingType: Buffer
-): boolean {
-    const bytes = Buffer.from(text, "utf8");
-    const length = Math.min(bytes.length, maxElementCount); // silent truncation, like the C++ edition
-    bytes.copy(value, 0, 0, length);
-    valueElementCount.writeUInt32LE(length, 0);
-    encodingType.writeUInt8(CHARACTER_STRING_ENCODING_UTF8, 0);
-    return true;
+function ValveActuatorDisconnected(): boolean {
+    return g_actuatorFaultFile !== "" && fs.existsSync(g_actuatorFaultFile);
 }
 
+// A monotonic clock (like the C++ steady_clock), started on the first tick.
+let g_simulationStarted: number | null = null;
+let g_simulationLastSecond = 0;
+
+function ActuatorSimulationTick(): void {
+    g_simulationStarted ??= performance.now();
+    const secondsRunning = Math.floor((performance.now() - g_simulationStarted) / 1000);
+    if (secondsRunning === g_simulationLastSecond) {
+        return;
+    }
+    g_simulationLastSecond = secondsRunning;
+
+    const reliability = ValveActuatorDisconnected() ? RELIABILITY_NO_OUTPUT : RELIABILITY_NO_FAULT_DETECTED;
+    if (reliability !== g_analogOutput1Reliability) {
+        g_analogOutput1Reliability = reliability;
+        console.log(
+            `Simulation: Analog Output 1 (Chartreuse) valve actuator ${reliability === RELIABILITY_NO_OUTPUT ? "disconnected" : "reconnected"}` +
+                ` - Reliability ${reliability === RELIABILITY_NO_OUTPUT ? "NO_OUTPUT" : "NO_FAULT_DETECTED"}`
+        );
+    }
+    if (g_analogOutput1Reliability === RELIABILITY_NO_FAULT_DETECTED) {
+        const setpoint = Math.fround(ResolvedCommand(g_analogOutput));
+        const difference = Math.fround(setpoint - g_analogInput1Value);
+        if (difference > VALVE_MAX_CHANGE_PER_SECOND) {
+            g_analogInput1Value = Math.fround(g_analogInput1Value + VALVE_MAX_CHANGE_PER_SECOND);
+        } else if (difference < -VALVE_MAX_CHANGE_PER_SECOND) {
+            g_analogInput1Value = Math.fround(g_analogInput1Value - VALVE_MAX_CHANGE_PER_SECOND);
+        } else {
+            g_analogInput1Value = setpoint;
+        }
+    }
+    g_binaryInput1Value = Math.trunc(ResolvedCommand(g_binaryOutput));
+    g_multiStateInput1Value = Math.trunc(ResolvedCommand(g_multiStateOutput));
+}
+
+// -----------------------------------------------------------------------------
+// 2. Property "get" callbacks
+//
+// The stack calls these when a client reads a property. For each data type the
+// stack uses a separate callback. We return true (and fill the value Buffer)
+// when we recognise the (object, property) pair, and false otherwise.
+//
+// THE errorCode OUT-PARAMETER. Every Get callback ends with an errorCode Buffer
+// (4 bytes, uint32 little-endian). The stack PRESETS it to success (84) before
+// the call, and reads it only if you return false. That gives a declining
+// callback two distinct meanings:
+//
+//   1. return false and LEAVE errorCode ALONE  -> "I have no opinion on this
+//      property." The stack falls back to its own handling (see below).
+//   2. return false and SET errorCode          -> "This read fails, with THIS
+//      BACnet error." The client gets exactly that Error-PDU.
+//
+// Option 2 is new (CAS BACnet Stack issue #974); before it, a Get callback had
+// no way to name an error at all. Do not reach for it reflexively - option 1 is
+// still the right answer most of the time, for the reason in the next paragraph.
+//
+// WHAT false-WITHOUT-AN-ERROR-CODE ACTUALLY DOES - the most important paragraph
+// in this file, and the opposite of what most people assume. It does NOT
+// reliably produce a BACnet error. The stack errors only for the handful of
+// properties it refuses to invent: Present_Value, Number_Of_States,
+// Relinquish_Default, Local_Date, Local_Time, and a Network Port's APDU_Length
+// (declining one of those reads back as Error: read-access-denied).
+// For EVERYTHING ELSE, a false return means the stack SILENTLY SUBSTITUTES a
+// default:
+//     Object_Name -> the literal string "undefined"
+//     Units       -> no-units (95)
+//     otherwise   -> a datatype zero-value
+//
+// AND THAT FALLBACK IS LOAD-BEARING, WHICH IS WHY WE DO NOT "FIX" IT HERE.
+// It is tempting to end every callback with errorCode = unknown-property so
+// nothing is ever silently invented. That breaks the device. The stack relies on
+// the decline-and-fabricate path to answer required properties the application
+// is not expected to serve - the Device's Max_APDU_Length_Accepted, APDU_Timeout
+// and Number_Of_APDU_Retries among them. Name an error on the catch-all return
+// and those required properties start failing instead of answering.
+// So: set errorCode ONLY where THIS device knows the read is wrong. There is
+// exactly one such case below (State_Text with an out-of-range array index); the
+// catch-all `return false` at the end of each callback deliberately leaves
+// errorCode alone.
+//
+// ADDING AN OBJECT? READ THIS FIRST.
+// The consequence is the opposite of reassuring. These callbacks are not
+// uniformly strict:
+//   - GetPropertyReal / GetPropertyEnumerated / GetPropertyUnsignedInteger match
+//     on object type AND INSTANCE (directly, or via GetCommandable(), which
+//     looks up the exact type+instance pair). A new instance falls through every
+//     one of those checks.
+//   - GetPropertyBool serves Out_Of_Service on object TYPE ONLY, so a new
+//     instance of an existing type gets Out_Of_Service for free.
+// So a half-added object does NOT fail loudly. Its Present_Value errors (that
+// one is in the list above) - but its Object_Name reads back as "undefined" and
+// its Units as no-units, with no error at all. Add two objects that way and BOTH
+// report Object_Name "undefined": duplicate object names within one device, which
+// is a spec violation and a hard BTL failure, and which every scan tool will show
+// you as a healthy object. The device looks fine and is non-conformant.
+//
+// So: when you add an instance, walk EVERY callback below, then read back every
+// required property of the new object and DIFF IT against the existing one. Do
+// not trust "it scanned OK" - that is exactly the failure mode. The TUTORIAL's
+// "Extending the example" recipe lists the edits.
+// -----------------------------------------------------------------------------
+
+// REAL (floating point) - the Analog Input's Present_Value, and the Analog
+// Output's Priority_Array slots, Relinquish_Default and setpoint range.
 function GetPropertyReal(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
     value: Buffer,
     useArrayIndex: boolean,
-    propertyArrayIndex: number
+    propertyArrayIndex: number,
+    _errorCode: Buffer // see "THE errorCode OUT-PARAMETER" above: we decline without naming an error
 ): boolean {
-    // Analog Input 1 ("Bronze") - the value this device exists to report.
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
     if (
         objectType === OBJECT_TYPE_ANALOG_INPUT &&
         objectInstance === ANALOG_INPUT_INSTANCE &&
         propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE
     ) {
+        // ON REAL HARDWARE: return the live sensor reading here. Read it from a
+        // cached variable that your hardware updates (as g_analogInput1Value is),
+        // NOT directly from a slow/blocking device (I2C, SPI, ADC conversion):
+        // this callback runs inside BACnetStack_Tick(), so blocking it delays all
+        // BACnet processing. Sample the sensor on a timer and just hand back the
+        // latest value from here.
         value.writeFloatLE(g_analogInput1Value, 0);
         return true;
     }
-    // Analog Output 1 ("Chartreuse") - the commandable model serves
-    // Present_Value, the Priority_Array slots (the stack asks slot-by-slot
-    // with useArrayIndex), and Relinquish_Default.
-    if (objectType === OBJECT_TYPE_ANALOG_OUTPUT && objectInstance === ANALOG_OUTPUT_INSTANCE) {
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-            value.writeFloatLE(CommandRead(g_analogOutput1), 0);
-            return true;
-        }
-        if (
-            propertyIdentifier === PROPERTY_IDENTIFIER_PRIORITY_ARRAY &&
-            useArrayIndex &&
-            propertyArrayIndex >= 1 &&
-            propertyArrayIndex <= 16
-        ) {
-            value.writeFloatLE(g_analogOutput1.value[propertyArrayIndex - 1], 0);
+    // Analog Output (commandable): serve its Priority_Array slots and
+    // Relinquish_Default. The stack reads each slot to compute Present_Value and
+    // to answer a ReadProperty of the whole array. For a null (relinquished) slot
+    // we return false - the stack then takes the "slot is null" answer from
+    // GetPropertyBool below.
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && objectType === OBJECT_TYPE_ANALOG_OUTPUT) {
+        const slot = ReadPrioritySlot(c, propertyIdentifier, useArrayIndex, propertyArrayIndex);
+        if (slot !== null) {
+            if (!slot.slotIsSet) {
+                return false;
+            }
+            value.writeFloatLE(slot.slotValue, 0);
             return true;
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_RELINQUISH_DEFAULT) {
-            value.writeFloatLE(g_analogOutput1.relinquishDefault, 0);
+            value.writeFloatLE(c.relinquishDefault, 0);
+            return true;
+        }
+        if (propertyIdentifier === PROPERTY_IDENTIFIER_MIN_PRES_VALUE) {
+            value.writeFloatLE(ANALOG_OUTPUT_MIN_PRES_VALUE, 0);
+            return true;
+        }
+        if (propertyIdentifier === PROPERTY_IDENTIFIER_MAX_PRES_VALUE) {
+            value.writeFloatLE(ANALOG_OUTPUT_MAX_PRES_VALUE, 0);
             return true;
         }
     }
     return false;
 }
 
+// ENUMERATED - the Binary Input's Present_Value (0 = inactive, 1 = active), the
+// Binary Output's Priority_Array slots, the Units of both analog objects, Analog
+// Output 1's Reliability, and the Network Port's BACnet_IP_Mode.
 function GetPropertyEnumerated(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
     value: Buffer,
     useArrayIndex: boolean,
-    propertyArrayIndex: number
+    propertyArrayIndex: number,
+    _errorCode: Buffer
 ): boolean {
-    // Binary Input 1 ("Emerald").
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
     if (objectType === OBJECT_TYPE_BINARY_INPUT && objectInstance === BINARY_INPUT_INSTANCE) {
         if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-            value.writeUInt32LE(g_binaryInput1Value, 0);
+            // ON REAL HARDWARE: return your cached input state here - the same rule
+            // as GetPropertyReal above applies (never block this callback on slow
+            // I/O; sample on a timer and hand back the latest).
+            value.writeUInt32LE(g_binaryInput1Value, 0); // the relay's feedback contact
             return true;
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_POLARITY) {
-            value.writeUInt32LE(POLARITY_NORMAL, 0);
+            value.writeUInt32LE(POLARITY_NORMAL, 0); // required property of a Binary Input
             return true;
         }
     }
-    // Binary Output 1 ("Fuchsia") - commandable (binary values travel as the
-    // BACnetBinaryPV enumeration: 0 = inactive, 1 = active).
-    if (objectType === OBJECT_TYPE_BINARY_OUTPUT && objectInstance === BINARY_OUTPUT_INSTANCE) {
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-            value.writeUInt32LE(CommandRead(g_binaryOutput1), 0);
-            return true;
-        }
-        if (
-            propertyIdentifier === PROPERTY_IDENTIFIER_PRIORITY_ARRAY &&
-            useArrayIndex &&
-            propertyArrayIndex >= 1 &&
-            propertyArrayIndex <= 16
-        ) {
-            value.writeUInt32LE(g_binaryOutput1.value[propertyArrayIndex - 1], 0);
+    // Binary Output (commandable): Present_Value is an enumerated active/inactive
+    // driven through the Priority_Array. Serve the array slots and Relinquish_Default
+    // (plus its required Polarity).
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && objectType === OBJECT_TYPE_BINARY_OUTPUT) {
+        const slot = ReadPrioritySlot(c, propertyIdentifier, useArrayIndex, propertyArrayIndex);
+        if (slot !== null) {
+            if (!slot.slotIsSet) {
+                return false;
+            }
+            value.writeUInt32LE(Math.trunc(slot.slotValue), 0);
             return true;
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_RELINQUISH_DEFAULT) {
-            value.writeUInt32LE(g_binaryOutput1.relinquishDefault, 0);
+            value.writeUInt32LE(Math.trunc(c.relinquishDefault), 0);
             return true;
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_POLARITY) {
-            value.writeUInt32LE(POLARITY_NORMAL, 0);
+            value.writeUInt32LE(POLARITY_NORMAL, 0); // required property of a Binary Output
             return true;
         }
     }
-    // Units are an enumeration, so they are served HERE, not in GetPropertyReal.
-    if (propertyIdentifier === PROPERTY_IDENTIFIER_UNITS) {
-        if (objectType === OBJECT_TYPE_ANALOG_INPUT && objectInstance === ANALOG_INPUT_INSTANCE) {
-            value.writeUInt32LE(ENGINEERING_UNITS_DEGREES_CELSIUS, 0);
-            return true;
-        }
-        if (objectType === OBJECT_TYPE_ANALOG_OUTPUT && objectInstance === ANALOG_OUTPUT_INSTANCE) {
-            value.writeUInt32LE(ENGINEERING_UNITS_PERCENT, 0);
-            return true;
-        }
+    // Units is REQUIRED on an Analog Input AND on an Analog Output. Serve BOTH.
+    // If you only serve the input's, the output does not error - it silently
+    // reports no-units(95), because Units is one of the properties the stack
+    // substitutes a default for rather than erroring on (see the note at the top
+    // of this section). A setpoint that reads back "no units" next to a degC
+    // sensor is the kind of thing nobody notices until commissioning.
+    if (
+        propertyIdentifier === PROPERTY_IDENTIFIER_UNITS &&
+        ((objectType === OBJECT_TYPE_ANALOG_INPUT && objectInstance === ANALOG_INPUT_INSTANCE) ||
+            (objectType === OBJECT_TYPE_ANALOG_OUTPUT && objectInstance === ANALOG_OUTPUT_INSTANCE))
+    ) {
+        value.writeUInt32LE(ENGINEERING_UNITS_DEGREES_CELSIUS, 0);
+        return true;
     }
-    // Network Port 1 ("Vermilion").
+    // Analog Output 1's Reliability (enabled in main()). The stack also reads it
+    // through this callback to build Status_Flags, so once enabled it must always
+    // answer.
+    if (
+        objectType === OBJECT_TYPE_ANALOG_OUTPUT &&
+        objectInstance === ANALOG_OUTPUT_INSTANCE &&
+        propertyIdentifier === PROPERTY_IDENTIFIER_RELIABILITY
+    ) {
+        value.writeUInt32LE(g_analogOutput1Reliability, 0);
+        return true;
+    }
     if (
         objectType === OBJECT_TYPE_NETWORK_PORT &&
         objectInstance === NETWORK_PORT_INSTANCE &&
         propertyIdentifier === PROPERTY_IDENTIFIER_BACNET_IP_MODE
     ) {
-        value.writeUInt32LE(BACNET_IP_MODE_NORMAL, 0);
+        value.writeUInt32LE(BACNET_IP_MODE_NORMAL, 0); // not foreign-device, not BBMD
         return true;
     }
     return false;
 }
 
+// UNSIGNED INTEGER - the Multi-State Input's Present_Value, the Multi-State
+// Output's Priority_Array slots, and the Device's Vendor_Identifier (the stack
+// also uses Vendor_Identifier to build I-Am).
 function GetPropertyUnsignedInteger(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
     value: Buffer,
     useArrayIndex: boolean,
-    propertyArrayIndex: number
+    propertyArrayIndex: number,
+    _errorCode: Buffer
 ): boolean {
-    // Multi-State Input 1 ("Hot Pink").
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
     if (objectType === OBJECT_TYPE_MULTI_STATE_INPUT && objectInstance === MULTI_STATE_INPUT_INSTANCE) {
         if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-            value.writeUInt32LE(g_multiStateInput1Value, 0);
+            value.writeUInt32LE(g_multiStateInput1Value, 0); // the drive's speed; valid range is 1..Number_Of_States
             return true;
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_NUMBER_OF_STATES) {
-            value.writeUInt32LE(MULTI_STATE_TEXT.length, 0);
+            value.writeUInt32LE(MULTI_STATE_INPUT_NUMBER_OF_STATES, 0); // required property
             return true;
         }
-        // State_Text[0] is the ARRAY SIZE query (BACnet array index 0).
-        if (
-            propertyIdentifier === PROPERTY_IDENTIFIER_STATE_TEXT &&
-            useArrayIndex &&
-            propertyArrayIndex === 0
-        ) {
-            value.writeUInt32LE(MULTI_STATE_TEXT.length, 0);
+        // State_Text is an array. The stack asks for its LENGTH here (array
+        // index 0) before reading each element via GetPropertyCharacterString.
+        if (propertyIdentifier === PROPERTY_IDENTIFIER_STATE_TEXT && useArrayIndex && propertyArrayIndex === 0) {
+            value.writeUInt32LE(MULTI_STATE_INPUT_NUMBER_OF_STATES, 0);
             return true;
         }
     }
-    // Multi-State Output 1 ("Indigo") - commandable.
-    if (objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT && objectInstance === MULTI_STATE_OUTPUT_INSTANCE) {
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-            value.writeUInt32LE(CommandRead(g_multiStateOutput1), 0);
-            return true;
-        }
-        if (
-            propertyIdentifier === PROPERTY_IDENTIFIER_PRIORITY_ARRAY &&
-            useArrayIndex &&
-            propertyArrayIndex >= 1 &&
-            propertyArrayIndex <= 16
-        ) {
-            value.writeUInt32LE(g_multiStateOutput1.value[propertyArrayIndex - 1], 0);
-            return true;
-        }
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_RELINQUISH_DEFAULT) {
-            value.writeUInt32LE(g_multiStateOutput1.relinquishDefault, 0);
-            return true;
-        }
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_NUMBER_OF_STATES) {
-            value.writeUInt32LE(MULTI_STATE_TEXT.length, 0);
-            return true;
-        }
-    }
-    // Device object.
     if (
         objectType === OBJECT_TYPE_DEVICE &&
         objectInstance === g_deviceInstance &&
@@ -445,8 +732,6 @@ function GetPropertyUnsignedInteger(
         value.writeUInt32LE(VENDOR_IDENTIFIER, 0);
         return true;
     }
-    // Network Port 1 ("Vermilion"). APDU_Length is one of the few properties
-    // where returning false IS an error on the wire - serve it.
     if (objectType === OBJECT_TYPE_NETWORK_PORT && objectInstance === NETWORK_PORT_INSTANCE) {
         if (propertyIdentifier === PROPERTY_IDENTIFIER_APDU_LENGTH) {
             value.writeUInt32LE(MAX_APDU_LENGTH, 0);
@@ -457,57 +742,90 @@ function GetPropertyUnsignedInteger(
             return true;
         }
         if (propertyIdentifier === PROPERTY_IDENTIFIER_BACNET_IP_UDP_PORT) {
-            value.writeUInt32LE(g_udpPort, 0);
+            value.writeUInt32LE(g_bacnetIpUdpPort, 0);
+            return true;
+        }
+    }
+    // Multi-State Output (commandable): Present_Value is an unsigned state number
+    // driven through the Priority_Array. Serve the array slots, Relinquish_Default,
+    // and the required Number_Of_States.
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT) {
+        const slot = ReadPrioritySlot(c, propertyIdentifier, useArrayIndex, propertyArrayIndex);
+        if (slot !== null) {
+            if (!slot.slotIsSet) {
+                return false;
+            }
+            value.writeUInt32LE(Math.trunc(slot.slotValue), 0);
+            return true;
+        }
+        if (propertyIdentifier === PROPERTY_IDENTIFIER_RELINQUISH_DEFAULT) {
+            value.writeUInt32LE(Math.trunc(c.relinquishDefault), 0);
+            return true;
+        }
+        if (propertyIdentifier === PROPERTY_IDENTIFIER_NUMBER_OF_STATES) {
+            value.writeUInt32LE(MULTI_STATE_OUTPUT_NUMBER_OF_STATES, 0);
             return true;
         }
     }
     return false;
 }
 
+// BOOLEAN - "is this Priority_Array slot null?" for the commandable outputs, and
+// Out_Of_Service, a required property of every input and output object and of
+// the Network Port.
 function GetPropertyBool(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
-    _objectInstance: number,
+    objectInstance: number,
     propertyIdentifier: number,
     value: Buffer,
     useArrayIndex: boolean,
-    propertyArrayIndex: number
+    propertyArrayIndex: number,
+    _errorCode: Buffer
 ): boolean {
-    // Priority_Array slot-is-NULL query: before asking for a slot's VALUE (in
-    // the datatype callback), the stack asks HERE whether the slot is NULL.
-    // NOTE the series-wide asymmetry, kept deliberately identical across all
-    // examples until changed in one sweep: this callback matches on TYPE only,
-    // while the value callbacks match type AND instance. Fine while each
-    // output type has one instance; carry the instance check if you add more.
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
+    // Commandable outputs: the stack asks "is this Priority_Array slot null?" with
+    // the boolean getter. Answer true (1) for a relinquished slot, false (0) for a
+    // commanded one. This is how the stack knows which slots to skip when computing
+    // Present_Value and how it encodes the NULLs in a ReadProperty of the array.
+    const c = GetCommandable(objectType, objectInstance);
     if (
+        c !== null &&
         propertyIdentifier === PROPERTY_IDENTIFIER_PRIORITY_ARRAY &&
         useArrayIndex &&
         propertyArrayIndex >= 1 &&
-        propertyArrayIndex <= 16
+        propertyArrayIndex <= BACNET_PRIORITY_ARRAY_SIZE
     ) {
-        if (objectType === OBJECT_TYPE_ANALOG_OUTPUT) {
-            value.writeUInt8(g_analogOutput1.isSet[propertyArrayIndex - 1] ? 0 : 1, 0);
-            return true;
-        }
-        if (objectType === OBJECT_TYPE_BINARY_OUTPUT) {
-            value.writeUInt8(g_binaryOutput1.isSet[propertyArrayIndex - 1] ? 0 : 1, 0);
-            return true;
-        }
-        if (objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT) {
-            value.writeUInt8(g_multiStateOutput1.isSet[propertyArrayIndex - 1] ? 0 : 1, 0);
-            return true;
-        }
+        value.writeUInt8(c.isSet[propertyArrayIndex - 1] ? 0 : 1, 0);
+        return true;
     }
-    // Out_Of_Service: every object in this example is permanently in service.
-    if (propertyIdentifier === PROPERTY_IDENTIFIER_OUT_OF_SERVICE) {
+    // Out_Of_Service is a required property of every input and output object and of
+    // the Network Port. This example never takes anything out of service: false.
+    if (
+        propertyIdentifier === PROPERTY_IDENTIFIER_OUT_OF_SERVICE &&
+        (objectType === OBJECT_TYPE_ANALOG_INPUT ||
+            objectType === OBJECT_TYPE_BINARY_INPUT ||
+            objectType === OBJECT_TYPE_MULTI_STATE_INPUT ||
+            objectType === OBJECT_TYPE_ANALOG_OUTPUT ||
+            objectType === OBJECT_TYPE_BINARY_OUTPUT ||
+            objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT ||
+            objectType === OBJECT_TYPE_NETWORK_PORT)
+    ) {
         value.writeUInt8(0, 0);
         return true;
     }
     return false;
 }
 
+// OCTET STRING - the Network Port's BACnet/IP addressing. The stack cannot know
+// the host's IP, so the application must supply IP_Address and IP_Subnet_Mask
+// (and IP_Default_Gateway). Each is four octets. The stack also reads IP_Address
+// (with BACnet_IP_UDP_Port) to build the port's six-octet MAC_Address.
 function GetPropertyOctetString(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
@@ -515,32 +833,62 @@ function GetPropertyOctetString(
     valueElementCount: Buffer,
     maxElementCount: number,
     _useArrayIndex: boolean,
-    _propertyArrayIndex: number
+    _propertyArrayIndex: number,
+    _errorCode: Buffer
 ): boolean {
-    // Network Port 1 ("Vermilion") - the IPv4 configuration, 4 octets each.
-    if (objectType === OBJECT_TYPE_NETWORK_PORT && objectInstance === NETWORK_PORT_INSTANCE && maxElementCount >= 4) {
-        let octets: number[] | null = null;
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_IP_ADDRESS) {
-            octets = g_ipAddress;
-        } else if (propertyIdentifier === PROPERTY_IDENTIFIER_IP_SUBNET_MASK) {
-            octets = g_ipSubnetMask;
-        } else if (propertyIdentifier === PROPERTY_IDENTIFIER_IP_DEFAULT_GATEWAY) {
-            octets = g_ipDefaultGateway;
-        }
-        if (octets !== null) {
-            value[0] = octets[0];
-            value[1] = octets[1];
-            value[2] = octets[2];
-            value[3] = octets[3];
-            valueElementCount.writeUInt32LE(4, 0);
-            return true;
-        }
+    if (
+        deviceInstance !== g_deviceInstance ||
+        objectType !== OBJECT_TYPE_NETWORK_PORT ||
+        objectInstance !== NETWORK_PORT_INSTANCE ||
+        maxElementCount < 4
+    ) {
+        return false;
     }
-    return false;
+    let source: number[];
+    switch (propertyIdentifier) {
+        case PROPERTY_IDENTIFIER_IP_ADDRESS:
+            source = g_ipAddress;
+            break;
+        case PROPERTY_IDENTIFIER_IP_SUBNET_MASK:
+            source = g_ipSubnetMask;
+            break;
+        case PROPERTY_IDENTIFIER_IP_DEFAULT_GATEWAY:
+            source = g_ipDefaultGateway;
+            break;
+        default:
+            return false;
+    }
+    Buffer.from(source).copy(value, 0, 0, 4);
+    valueElementCount.writeUInt32LE(4, 0);
+    return true;
 }
 
+// Small helper: copy a string into the stack's character-string buffer and set
+// the element count + encoding. Returns true (so callers can `return`).
+function ReturnCharacterString(
+    text: string,
+    value: Buffer,
+    valueElementCount: Buffer,
+    maxElementCount: number,
+    encodingType: Buffer
+): boolean {
+    const bytes = Buffer.from(text, "utf8");
+    // Truncate SILENTLY to fit the stack's buffer. maxElementCount is
+    // MAX_CHARACTER_STRING_SIZE (256 in this build), and our longest string
+    // (DEVICE_DESCRIPTION) fits with room to spare - so this never trips here.
+    // If you lengthen any served string, check it against that limit, or make
+    // this truncation loud.
+    const length = Math.min(bytes.length, maxElementCount);
+    bytes.copy(value, 0, 0, length);
+    valueElementCount.writeUInt32LE(length, 0);
+    encodingType.writeUInt8(CHARACTER_STRING_ENCODING_UTF8, 0);
+    return true;
+}
+
+// CHARACTER STRING - Object_Name for each object, State_Text, and the Device's
+// identity strings.
 function GetPropertyCharacterString(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
@@ -549,88 +897,103 @@ function GetPropertyCharacterString(
     maxElementCount: number,
     encodingType: Buffer,
     useArrayIndex: boolean,
-    propertyArrayIndex: number
+    propertyArrayIndex: number,
+    errorCode: Buffer
 ): boolean {
-    const text = (t: string) => ReturnCharacterString(t, value, valueElementCount, maxElementCount, encodingType);
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
+    const serve = (text: string): boolean =>
+        ReturnCharacterString(text, value, valueElementCount, maxElementCount, encodingType);
 
-    // Multi-State Input State_Text[1..3] (1-based array on the wire; [0] is
-    // the size query, served in GetPropertyUnsignedInteger).
+    // State_Text (optional) - one label per state of the Multi-State Input. It is
+    // a BACnet array, so the stack asks for one element at a time by index
+    // (1..Number_Of_States). Present_Value 1 -> "On", 2 -> "Off", 3 -> "Auto".
     if (
         objectType === OBJECT_TYPE_MULTI_STATE_INPUT &&
         objectInstance === MULTI_STATE_INPUT_INSTANCE &&
         propertyIdentifier === PROPERTY_IDENTIFIER_STATE_TEXT &&
-        useArrayIndex &&
-        propertyArrayIndex >= 1 &&
-        propertyArrayIndex <= MULTI_STATE_TEXT.length
+        useArrayIndex
     ) {
-        return text(MULTI_STATE_TEXT[propertyArrayIndex - 1]);
+        const stateText = ["On", "Off", "Auto"];
+        if (propertyArrayIndex >= 1 && propertyArrayIndex <= MULTI_STATE_INPUT_NUMBER_OF_STATES) {
+            return serve(stateText[propertyArrayIndex - 1]);
+        }
+        // The one place in this file where naming an error is clearly right: the
+        // client asked for State_Text[n] and this object has no element n. That
+        // is not "no opinion" - it is a wrong read, and the spec has a code for
+        // it. Without this the client would silently receive an empty string.
+        errorCode.writeUInt32LE(ERROR_CODE_INVALID_ARRAY_INDEX, 0);
+        return false;
     }
 
-    // Object_Name for every object - REQUIRED, must be unique in the device,
-    // and one of the silent-default traps: forget one and the stack answers
-    // the literal "undefined" instead of erroring.
+    // Object_Name - the colour name for each object.
     if (propertyIdentifier === PROPERTY_IDENTIFIER_OBJECT_NAME) {
         if (objectType === OBJECT_TYPE_DEVICE && objectInstance === g_deviceInstance) {
-            return text(DEVICE_NAME);
+            return serve(DEVICE_NAME);
         }
         if (objectType === OBJECT_TYPE_ANALOG_INPUT && objectInstance === ANALOG_INPUT_INSTANCE) {
-            return text("Bronze");
+            return serve("Bronze");
         }
         if (objectType === OBJECT_TYPE_BINARY_INPUT && objectInstance === BINARY_INPUT_INSTANCE) {
-            return text("Emerald");
+            return serve("Emerald");
         }
         if (objectType === OBJECT_TYPE_MULTI_STATE_INPUT && objectInstance === MULTI_STATE_INPUT_INSTANCE) {
-            return text("Hot Pink");
+            return serve("Hot Pink");
         }
         if (objectType === OBJECT_TYPE_ANALOG_OUTPUT && objectInstance === ANALOG_OUTPUT_INSTANCE) {
-            return text("Chartreuse");
+            return serve("Chartreuse");
         }
         if (objectType === OBJECT_TYPE_BINARY_OUTPUT && objectInstance === BINARY_OUTPUT_INSTANCE) {
-            return text("Fuchsia");
+            return serve("Fuchsia");
         }
         if (objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT && objectInstance === MULTI_STATE_OUTPUT_INSTANCE) {
-            return text("Indigo");
+            return serve("Indigo");
         }
         if (objectType === OBJECT_TYPE_NETWORK_PORT && objectInstance === NETWORK_PORT_INSTANCE) {
-            return text("Vermilion");
+            return serve("Vermilion");
         }
     }
 
-    // Device object strings.
+    // The remaining strings are all on the Device object - its identity, read
+    // by clients and used to populate the device's I-Am / object list.
     if (objectType === OBJECT_TYPE_DEVICE && objectInstance === g_deviceInstance) {
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_DESCRIPTION) {
-            return text(DEVICE_DESCRIPTION);
-        }
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_VENDOR_NAME) {
-            return text(VENDOR_NAME);
-        }
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_MODEL_NAME) {
-            return text(MODEL_NAME);
-        }
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_FIRMWARE_REVISION) {
-            return text(g_firmwareRevision);
-        }
-        if (propertyIdentifier === PROPERTY_IDENTIFIER_APPLICATION_SOFTWARE_VERSION) {
-            return text(APP_VERSION);
+        switch (propertyIdentifier) {
+            case PROPERTY_IDENTIFIER_DESCRIPTION:
+                return serve(DEVICE_DESCRIPTION);
+            case PROPERTY_IDENTIFIER_VENDOR_NAME:
+                return serve(VENDOR_NAME);
+            case PROPERTY_IDENTIFIER_MODEL_NAME:
+                return serve(MODEL_NAME);
+            case PROPERTY_IDENTIFIER_FIRMWARE_REVISION:
+                return serve(g_firmwareRevision);
+            case PROPERTY_IDENTIFIER_APPLICATION_SOFTWARE_VERSION:
+                return serve(APP_VERSION);
+            default:
+                break;
         }
     }
     return false;
 }
 
-// =============================================================================
-// 2b. Set callbacks (DS-WP-B lands here)
-// =============================================================================
-// A WriteProperty to a commandable Present_Value arrives with a priority
-// (1..16; 0 when the request carried none = act at 16). Writing NULL arrives
-// separately in SetPropertyNull and means RELINQUISH that priority slot.
+// -----------------------------------------------------------------------------
+// 2b. Property "set" callbacks - DS-WP-B (identical to B-SA, which defines them)
 //
-// To REJECT a write: write a BACnet error code into the errorCode out-Buffer
-// (errorCode.writeUInt32LE(code, 0)) and return false. Validate before
-// accepting - a tutorial that accepts anything teaches devices that accept
-// anything.
+// The stack calls these when a client sends WriteProperty to a commandable
+// output's Present_Value. The value arrives already decoded into the matching
+// data type, together with the priority (1..16) the client wrote at. We store it
+// in the object's Priority_Array; the stack recomputes Present_Value from the
+// array on the next read. A WriteProperty of NULL relinquishes a slot and arrives
+// through SetPropertyNull instead.
+//
+// Return true when we accept the write; return false (optionally setting
+// errorCode, a 4-byte uint32 little-endian out-Buffer) to reject it, and the
+// stack answers with a BACnet Error-PDU.
+// -----------------------------------------------------------------------------
 
+// REAL write - Analog Output 1 (Chartreuse) Present_Value.
 function SetPropertyReal(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
@@ -638,21 +1001,33 @@ function SetPropertyReal(
     _useArrayIndex: boolean,
     _propertyArrayIndex: number,
     priority: number,
-    _errorCode: Buffer
+    errorCode: Buffer
 ): boolean {
-    if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-        const c = GetCommandable(objectType, objectInstance);
-        if (c === g_analogOutput1 && c !== null) {
-            CommandWrite(c, priority, value); // any REAL is a valid percent command here
-            console.log(`FYI: Analog Output 1 ("Chartreuse") commanded to ${value} at priority ${EffectivePriority(priority)}`);
-            return true;
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && objectType === OBJECT_TYPE_ANALOG_OUTPUT && propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
+        // The setpoint must lie in Min_Pres_Value .. Max_Pres_Value, the range this
+        // object serves. Reject anything outside it with value-out-of-range,
+        // exactly as the Binary and Multi-State Output setters below do for
+        // their fixed ranges - nothing is stored, so the output does not move.
+        if (value < ANALOG_OUTPUT_MIN_PRES_VALUE || value > ANALOG_OUTPUT_MAX_PRES_VALUE) {
+            errorCode.writeUInt32LE(ERROR_CODE_VALUE_OUT_OF_RANGE, 0);
+            return false;
         }
+        CommandWrite(c, priority, value);
+        console.log(
+            `WriteProperty: Analog Output ${objectInstance} (Chartreuse) <- ${value.toFixed(2)} @ priority ${EffectivePriority(priority)}`
+        );
+        return true;
     }
     return false;
 }
 
+// ENUMERATED write - Binary Output 1 (Fuchsia) Present_Value (0/1).
 function SetPropertyEnumerated(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
@@ -662,24 +1037,30 @@ function SetPropertyEnumerated(
     priority: number,
     errorCode: Buffer
 ): boolean {
-    if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-        const c = GetCommandable(objectType, objectInstance);
-        if (c === g_binaryOutput1 && c !== null) {
-            if (value > 1) {
-                // BACnetBinaryPV is inactive(0) / active(1) - nothing else.
-                errorCode.writeUInt32LE(ERROR_CODE_VALUE_OUT_OF_RANGE, 0);
-                return false;
-            }
-            CommandWrite(c, priority, value);
-            console.log(`FYI: Binary Output 1 ("Fuchsia") commanded to ${value === 1 ? "active" : "inactive"} at priority ${EffectivePriority(priority)}`);
-            return true;
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && objectType === OBJECT_TYPE_BINARY_OUTPUT && propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
+        // A Binary Output's Present_Value is 0 (inactive) or 1 (active). Reject
+        // anything else with value-out-of-range - validating the written value is
+        // part of being a conformant DS-WP-B device.
+        if (value > 1) {
+            errorCode.writeUInt32LE(ERROR_CODE_VALUE_OUT_OF_RANGE, 0);
+            return false;
         }
+        CommandWrite(c, priority, value);
+        console.log(
+            `WriteProperty: Binary Output ${objectInstance} (Fuchsia) <- ${value ? "active" : "inactive"} @ priority ${EffectivePriority(priority)}`
+        );
+        return true;
     }
     return false;
 }
 
+// UNSIGNED write - Multi-State Output 1 (Indigo) Present_Value (state 1..3).
 function SetPropertyUnsignedInteger(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
@@ -689,23 +1070,30 @@ function SetPropertyUnsignedInteger(
     priority: number,
     errorCode: Buffer
 ): boolean {
-    if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-        const c = GetCommandable(objectType, objectInstance);
-        if (c === g_multiStateOutput1 && c !== null) {
-            if (value < 1 || value > MULTI_STATE_TEXT.length) {
-                errorCode.writeUInt32LE(ERROR_CODE_VALUE_OUT_OF_RANGE, 0);
-                return false;
-            }
-            CommandWrite(c, priority, value);
-            console.log(`FYI: Multi-State Output 1 ("Indigo") commanded to state ${value} ("${MULTI_STATE_TEXT[value - 1]}") at priority ${EffectivePriority(priority)}`);
-            return true;
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && objectType === OBJECT_TYPE_MULTI_STATE_OUTPUT && propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
+        // A Multi-State Output's Present_Value is a state number in 1..Number_Of_States.
+        // Reject anything outside that range with value-out-of-range.
+        if (value < 1 || value > MULTI_STATE_OUTPUT_NUMBER_OF_STATES) {
+            errorCode.writeUInt32LE(ERROR_CODE_VALUE_OUT_OF_RANGE, 0);
+            return false;
         }
+        CommandWrite(c, priority, value);
+        console.log(
+            `WriteProperty: Multi-State Output ${objectInstance} (Indigo) <- state ${value} @ priority ${EffectivePriority(priority)}`
+        );
+        return true;
     }
     return false;
 }
 
+// NULL write - relinquish a commandable output's Present_Value at a priority. The
+// stack routes a WriteProperty of NULL here (one callback for every data type).
 function SetPropertyNull(
-    _deviceInstance: number,
+    deviceInstance: number,
     objectType: number,
     objectInstance: number,
     propertyIdentifier: number,
@@ -714,273 +1102,483 @@ function SetPropertyNull(
     priority: number,
     _errorCode: Buffer
 ): boolean {
-    // Writing NULL to a commandable Present_Value = relinquish that priority.
-    if (propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
-        const c = GetCommandable(objectType, objectInstance);
-        if (c !== null) {
-            CommandRelinquish(c, priority);
-            console.log(`FYI: priority ${EffectivePriority(priority)} relinquished on object type ${objectType} instance ${objectInstance}`);
-            return true;
-        }
+    if (deviceInstance !== g_deviceInstance) {
+        return false;
+    }
+    const c = GetCommandable(objectType, objectInstance);
+    if (c !== null && propertyIdentifier === PROPERTY_IDENTIFIER_PRESENT_VALUE) {
+        CommandRelinquish(c, priority);
+        const objectTypeName =
+            objectType === OBJECT_TYPE_ANALOG_OUTPUT
+                ? "Analog Output"
+                : objectType === OBJECT_TYPE_BINARY_OUTPUT
+                  ? "Binary Output"
+                  : "Multi-State Output";
+        console.log(`WriteProperty: relinquished ${objectTypeName} ${objectInstance} @ priority ${EffectivePriority(priority)}`);
+        return true;
     }
     return false;
 }
 
-// =============================================================================
-// 2c. DeviceCommunicationControl (DM-DCC-B) - the B-ASC addition
-// =============================================================================
-// The one capability that turns a B-SA into a B-ASC: a client can tell this
-// device to stop initiating (disable-initiation) or resume (enable),
-// optionally for a limited time, optionally guarded by a password. The STACK
-// enforces the resulting communication state; this callback only decides
-// whether to accept the request.
+// -----------------------------------------------------------------------------
+// 2c. DeviceCommunicationControl callback - the B-ASC addition (DM-DCC-B)
 //
-// SILENT TRAP - there is no default errorCode: the stack pre-seeds it with
-// success(84), so returning false WITHOUT writing errorCode puts the absurd
-// "Error Class SERVICES, Error Code success" on the wire. Always write the
-// code before returning false.
+// A management station sends DeviceCommunicationControl to tell a device to stop
+// or resume communicating - useful to quiet a noisy device during commissioning.
+// The CAS BACnet Stack runs the actual enable/disable state machine (and the
+// optional re-enable timer) for us; this callback's job is to (a) validate the
+// optional password and (b) let the application know what was asked.
 //
-// Note: at Protocol_Revision >= 20 the plain disable(1) is deprecated - the
-// STACK answers it service-request-denied AFTER this callback returns true.
-
+//   enableDisable: 0 = enable (resume), 1 = disable (stop initiating AND
+//                  responding), 2 = disable-initiation (keep responding).
+//   useTimeDuration/timeDuration: if set, the device auto-re-enables after
+//                  timeDuration minutes. The stack handles that timer.
+//   password:      a Buffer holding exactly the password octets the request
+//                  carried (empty when it carried none) - in Node there is no
+//                  separate passwordLength argument; the Buffer has its own.
+//
+// Return true to accept (the stack then applies the new communication state), or
+// false with errorCode = password-failure to reject a bad password.
+//
+// NOTE (Protocol_Revision >= 20): the plain "disable" value (1) is DEPRECATED.
+// Even if this callback accepts it, the stack rejects the request with
+// service-request-denied - the standard now expects "disable-initiation" (2)
+// (the device keeps answering reads but stops initiating). So at rev 30 only
+// enable (0) and disable-initiation (2) actually take effect.
+// -----------------------------------------------------------------------------
 function DeviceCommunicationControl(
     deviceInstance: number,
     enableDisable: number,
-    password: Buffer, // the Buffer's own length IS the password length
+    password: Buffer,
     useTimeDuration: boolean,
     timeDuration: number,
     errorCode: Buffer
 ): boolean {
     if (deviceInstance !== g_deviceInstance) {
-        // Not this device - a router/gateway product would route it onward.
+        // Not our device. Set errorCode even here - see the note at the end of
+        // this function: a false return must always name its error.
         errorCode.writeUInt32LE(ERROR_CODE_OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, 0);
         return false;
     }
-    // Compare length first, then bytes. Deliberately NOT a string compare: a
-    // wire CharacterString may contain embedded NUL bytes, and converting to a
-    // JS string then using === would treat "ab\0cd" and "ab" differently than
-    // the wire did. Buffer.equals compares the exact bytes.
-    const expected = Buffer.from(DCC_PASSWORD, "utf8");
-    if (password.length !== expected.length || !password.equals(expected)) {
-        errorCode.writeUInt32LE(ERROR_CODE_PASSWORD_FAILURE, 0);
-        return false;
+
+    // Check the password if this device requires one. A device with no configured
+    // password (g_dccPassword === "") accepts any request.
+    //
+    // Compare by LENGTH FIRST, then bytes - as raw octets, not as strings. A
+    // BACnet CharacterString may legitimately contain embedded NULs, and turning
+    // the Buffer into a JS string first would also re-decode its bytes; compare
+    // what crossed the wire against the configured password's UTF-8 bytes.
+    //
+    // On a mismatch we set errorCode = password-failure, and the stack pairs
+    // that specific code with Error Class = SECURITY (clause 16.1.1.3.1).
+    //
+    // NOTE ON SECURITY, because this is a tutorial and the honest answer matters:
+    // a DCC password crosses the wire in PLAINTEXT. This is not a security
+    // boundary - it is a guard against accidents. Anyone who can time this
+    // compare can simply sniff the password instead. If you need real protection,
+    // use BACnet/SC.
+    const required = Buffer.from(g_dccPassword, "utf8");
+    if (required.length > 0) {
+        let matches = password.length === required.length;
+        if (matches) {
+            for (let i = 0; i < required.length; ++i) {
+                if (password[i] !== required[i]) {
+                    matches = false;
+                    break;
+                }
+            }
+        }
+        if (!matches) {
+            console.log("DeviceCommunicationControl: REJECTED (password failure)");
+            errorCode.writeUInt32LE(ERROR_CODE_PASSWORD_FAILURE, 0);
+            return false;
+        }
     }
-    console.log(
-        `FYI: DeviceCommunicationControl accepted: enableDisable=${enableDisable}` +
-            (useTimeDuration ? ` for ${timeDuration} minute(s)` : "") +
-            ". The stack now enforces the communication state."
-    );
+
+    // NOTE: the stack applies the deprecation rule AFTER this callback. For the
+    // deprecated plain "disable" (1) at Protocol_Revision >= 20 it overrides our
+    // acceptance and answers service-request-denied - so the line we print for
+    // that case reflects the request received, not a state the device entered.
+    const action =
+        enableDisable === DCC_ENABLE
+            ? "enable (resume communication)"
+            : enableDisable === DCC_DISABLE
+              ? "disable (1) - DEPRECATED, the stack will reject this"
+              : enableDisable === DCC_DISABLE_INITIATION
+                ? "disable-initiation (keep responding)"
+                : "unknown";
+    if (useTimeDuration) {
+        console.log(`DeviceCommunicationControl: ${action} for ${timeDuration} minute(s)`);
+    } else {
+        console.log(`DeviceCommunicationControl: ${action} (indefinitely)`);
+    }
+    // Accept. Nothing to write to errorCode on the success path.
+    //
+    // IMPORTANT, AND IT IS NOT WHAT YOU WOULD GUESS: this callback MUST set
+    // errorCode on EVERY `false` return. The DCC path has no sensible default:
+    // the stack maps only optional-functionality-not-supported and
+    // service-request-denied to Error Class SERVICES, and turns any other code -
+    // including whatever an unset errorCode holds - into SECURITY /
+    // password-failure. Say what you mean.
+    //
+    // This differs from the SetProperty* callbacks, which DO have a sensible
+    // fallback (write-access-denied) - so do not carry the habit across.
     return true;
 }
 
-// =============================================================================
+// -----------------------------------------------------------------------------
+// 2d. The I-Am heartbeat - what DeviceCommunicationControl silences
+//
+// Every HEARTBEAT_SECONDS the device broadcasts an unsolicited I-Am, announcing
+// that it is still on the network (DM-DDB-B: the B device initiates I-Am). This
+// is the example's one INITIATED message, and so the one a management station's
+// DeviceCommunicationControl visibly controls. Cl. 16.1.2: with
+// DISABLE_INITIATION in force "the responding BACnet-user shall discontinue the
+// initiation of messages except for I-Am requests issued in accordance with the
+// Who-Is service procedure" - this I-Am is not one of those, so the stack
+// refuses to send it, while a Who-Is still gets its I-Am and every ReadProperty
+// and WriteProperty is still answered.
+//
+// The example does NOT track the DCC state itself: it simply keeps asking, and
+// the stack decides. That is the point - an application that checked a flag of
+// its own could get it wrong; this way the heartbeat stops exactly when the stack
+// says initiation is disabled, and starts again on ENABLE or when the request's
+// Time_Duration runs out.
+//
+// A product would announce far less often - minutes, or not at all; 5 s keeps
+// the demonstration watchable.
+// -----------------------------------------------------------------------------
+const HEARTBEAT_SECONDS = 5;
+
+let g_heartbeatStarted: number | null = null; // monotonic, started on the first tick
+let g_lastHeartbeat = 0;
+
+function HeartbeatTick(): void {
+    g_heartbeatStarted ??= performance.now();
+    const heartbeat = Math.floor((performance.now() - g_heartbeatStarted) / 1000 / HEARTBEAT_SECONDS);
+    if (heartbeat === g_lastHeartbeat) {
+        return;
+    }
+    g_lastHeartbeat = heartbeat;
+    // The same subnet broadcast as the start-up I-Am. Each one the stack really
+    // sends shows as a "TX ... (broadcast) ... I-Am" line on the console; one it
+    // refuses under DISABLE_INITIATION shows nothing.
+    SendIAm(g_deviceInstance, g_bacnetIpUdpPort, NETWORK_PORT_INSTANCE);
+}
+
+// -----------------------------------------------------------------------------
 // 3. main()
-// =============================================================================
+// -----------------------------------------------------------------------------
+function fail(message: string): never {
+    console.log(`Error: ${message}`);
+    process.exit(1);
+}
 
 async function main(): Promise<void> {
     const argv = process.argv.slice(2);
 
-    // Load the CAS BACnet Stack FIRST - deliberately before even --version,
-    // because PrintVersion() calls BACnetStack_GetAPIMajorVersion(). Same
-    // contract as every edition of this example: LoadBACnetFunctions() once,
-    // before any stack call, and check the result.
+    // --- Load the CAS BACnet Stack -------------------------------------------
+    // Required before any other BACnetStack_* call - and before even --version,
+    // which prints the loaded stack's version.
     if (!LoadBACnetFunctions()) {
         console.error(`Error: failed to load the CAS BACnet Stack: ${CASBACnetStackAdapter_LastError()}`);
         process.exit(1);
     }
+
+    // g_firmwareRevision (Device object property 44): the STACK's version, not
+    // this example's own (that is Application_Software_Version / APP_VERSION).
+    // Must happen after LoadBACnetFunctions() and before the Device object is
+    // ever readable.
     g_firmwareRevision =
         `${BACnetStack_GetAPIMajorVersion()}.${BACnetStack_GetAPIMinorVersion()}.` +
         `${BACnetStack_GetAPIPatchVersion()}.${BACnetStack_GetAPIBuildVersion()}`;
 
+    // --- Command line + version --------------------------------------------
+    // --help / --version print and exit, so handle them before we bind a socket.
     if (HandleHelpAndVersionArgs(argv, APP_NAME, APP_VERSION)) {
         return;
     }
-    g_udpPort = ParsePortArg(argv, 47808);
+    const port = ParsePortArg(argv, 47808);
     g_deviceInstance = ParseDeviceIdArg(argv, g_deviceInstance);
+    g_dccPassword = ParseDccPasswordArg(argv, DEFAULT_DCC_PASSWORD);
     PrintVersion(APP_NAME, APP_VERSION);
+    if (g_dccPassword !== "") {
+        // Say THAT a password is set, never what it is.
+        console.log("FYI: DeviceCommunicationControl requires a password (--dcc-password).");
+    }
 
+    // --- Bind the BACnet/IP socket -----------------------------------------
     // The application owns the socket; the stack only sees the callbacks.
     const udp = new SimpleUDP();
     try {
-        await udp.Setup(g_udpPort);
-    } catch (err) {
-        console.error(`Error: could not bind UDP port ${g_udpPort}: ${err instanceof Error ? err.message : err}`);
-        console.error("Is another BACnet device already running on this machine? Try --port.");
-        process.exit(1);
+        await udp.Setup(port);
+    } catch (bindError) {
+        fail(`Failed to bind UDP port ${port} (Network Port ${NETWORK_PORT_INSTANCE}): ` +
+            `${bindError instanceof Error ? bindError.message : bindError}`);
     }
+    console.log(`FYI: Listening for BACnet/IP on UDP port ${port} (Network Port ${NETWORK_PORT_INSTANCE}).`);
+
+    // Capture the BACnet/IP addressing the Network Port object will report.
+    g_bacnetIpUdpPort = port;
+    await DiscoverPrimaryIPv4();
     const local = GetLocalIPv4();
     g_ipAddress = local.address.split(".").map(Number);
     g_ipSubnetMask = local.netmask.split(".").map(Number);
-    console.log(`FYI: listening on ${local.address}:${g_udpPort} (broadcast ${local.broadcast})`);
 
-    // Callbacks BEFORE the device exists: transport/time first, then one
-    // registration per datatype this example serves, then DCC.
-    RegisterCommonCallbacks(udp);
+    // --- Register callbacks -------------------------------------------------
+    // The transport + time callbacks are shared boilerplate, keyed to the
+    // Network Port instance this socket belongs to (added below). The stack
+    // identifies a link by its Network Port INSTANCE, so the transport callbacks
+    // (and every I-Am) have to name the one added below.
+    RegisterCommonCallbacks(udp, NETWORK_PORT_INSTANCE);
+    // The property callbacks are specific to this example.
     BACnetStack_RegisterCallbackGetPropertyReal(GetPropertyReal);
     BACnetStack_RegisterCallbackGetPropertyEnumerated(GetPropertyEnumerated);
     BACnetStack_RegisterCallbackGetPropertyUnsignedInteger(GetPropertyUnsignedInteger);
+    BACnetStack_RegisterCallbackGetPropertyCharacterString(GetPropertyCharacterString);
     BACnetStack_RegisterCallbackGetPropertyBool(GetPropertyBool);
     BACnetStack_RegisterCallbackGetPropertyOctetString(GetPropertyOctetString);
-    BACnetStack_RegisterCallbackGetPropertyCharacterString(GetPropertyCharacterString);
+    // The "set" callbacks accept WriteProperty (DS-WP-B) to the commandable
+    // outputs. One callback per written data type, plus the NULL callback that
+    // relinquishes a priority slot.
     BACnetStack_RegisterCallbackSetPropertyReal(SetPropertyReal);
     BACnetStack_RegisterCallbackSetPropertyEnumerated(SetPropertyEnumerated);
     BACnetStack_RegisterCallbackSetPropertyUnsignedInteger(SetPropertyUnsignedInteger);
     BACnetStack_RegisterCallbackSetPropertyNull(SetPropertyNull);
+    // The DeviceCommunicationControl callback makes this a B-ASC (DM-DCC-B).
     BACnetStack_RegisterCallbackDeviceCommunicationControl(DeviceCommunicationControl);
 
-    // The device. AddDevice creates the Device object itself - do not AddObject it.
+    // --- Create the device --------------------------------------------------
     if (!BACnetStack_AddDevice(g_deviceInstance)) {
-        console.error("Error: BACnetStack_AddDevice failed.");
-        process.exit(1);
+        fail(`Failed to add the Device ${g_deviceInstance}.`);
     }
 
-    // Exactly the services the B-ASC profile requires - nothing more. The
-    // stack emits Protocol_Services_Supported verbatim from these flags, and
-    // its defaults leave even I-Am/I-Have false: enable everything you claim.
-    const services: Array<[number, string]> = [
-        [SERVICE_READ_PROPERTY, "ReadProperty (DS-RP-B)"],
-        [SERVICE_WRITE_PROPERTY, "WriteProperty (DS-WP-B)"],
-        [SERVICE_DEVICE_COMMUNICATION_CONTROL, "DeviceCommunicationControl (DM-DCC-B)"],
-        [SERVICE_WHO_IS, "Who-Is (DM-DDB-B)"],
-        [SERVICE_I_AM, "I-Am (DM-DDB-B)"],
-        [SERVICE_WHO_HAS, "Who-Has (DM-DOB-B)"],
-        [SERVICE_I_HAVE, "I-Have (DM-DOB-B)"],
-    ];
-    for (const [service, label] of services) {
-        if (!BACnetStack_SetServiceEnabled(g_deviceInstance, service, true)) {
-            console.error(`Error: SetServiceEnabled failed for ${label}.`);
-            process.exit(1);
-        }
+    // Enable the three services a B-ASC must execute: ReadProperty (DS-RP-B),
+    // WriteProperty (DS-WP-B), and DeviceCommunicationControl (DM-DCC-B). We set
+    // them explicitly to make the profile requirements obvious.
+    //
+    // We deliberately do NOT enable ReadPropertyMultiple, SubscribeCOV, or any
+    // alarm/event service: an Application Specific Controller does not require
+    // them, so a faithful B-ASC example leaves them off.
+    if (!BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_READ_PROPERTY, true)) {
+        fail("Failed to enable the ReadProperty service.");
+    }
+    if (!BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_WRITE_PROPERTY, true)) {
+        fail("Failed to enable the WriteProperty service.");
+    }
+    if (!BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_DEVICE_COMMUNICATION_CONTROL, true)) {
+        fail("Failed to enable the DeviceCommunicationControl service.");
     }
 
-    // The objects - the series' four base objects plus this profile's three
-    // commandable outputs, plus the required Network Port.
-    const objects: Array<[number, number, string]> = [
-        [OBJECT_TYPE_ANALOG_INPUT, ANALOG_INPUT_INSTANCE, 'Analog Input 1 ("Bronze")'],
-        [OBJECT_TYPE_BINARY_INPUT, BINARY_INPUT_INSTANCE, 'Binary Input 1 ("Emerald")'],
-        [OBJECT_TYPE_MULTI_STATE_INPUT, MULTI_STATE_INPUT_INSTANCE, 'Multi-State Input 1 ("Hot Pink")'],
-        [OBJECT_TYPE_ANALOG_OUTPUT, ANALOG_OUTPUT_INSTANCE, 'Analog Output 1 ("Chartreuse")'],
-        [OBJECT_TYPE_BINARY_OUTPUT, BINARY_OUTPUT_INSTANCE, 'Binary Output 1 ("Fuchsia")'],
-        [OBJECT_TYPE_MULTI_STATE_OUTPUT, MULTI_STATE_OUTPUT_INSTANCE, 'Multi-State Output 1 ("Indigo")'],
-    ];
-    for (const [objectType, objectInstance, label] of objects) {
-        if (!BACnetStack_AddObject(g_deviceInstance, objectType, objectInstance)) {
-            console.error(`Error: AddObject failed for ${label}.`);
-            process.exit(1);
-        }
-    }
+    // Discovery: Who-Is/I-Am (DM-DDB-B) and Who-Has/I-Have (DM-DOB-B).
+    //
+    // These need enabling even though the device already ANSWERS them. The
+    // stack's service defaults are whoIs + whoHas + readProperty only - iAm and
+    // iHave are left FALSE. Who-Is is answered and the start-up I-Am is sent
+    // regardless, because neither is gated on the bit; but
+    // Protocol_Services_Supported is emitted verbatim from that bitstring, so
+    // without these calls the device DOES I-Am and I-Have while telling every
+    // client it supports neither. The README claims DM-DDB-B and DM-DOB-B; this
+    // is what makes the claim true on the wire.
     if (
-        !BACnetStack_AddNetworkPortObjectWithNetworkNumber(
+        !BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_WHO_IS, true) ||
+        !BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_I_AM, true) ||
+        !BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_WHO_HAS, true) ||
+        !BACnetStack_SetServiceEnabled(g_deviceInstance, SERVICE_I_HAVE, true)
+    ) {
+        fail("Failed to enable the discovery services (Who-Is/I-Am, Who-Has/I-Have).");
+    }
+
+    // --- Add the read-only sensor objects -----------------------------------
+    // Every stack setup call returns a bool; a real device should always check
+    // it, so this example does too.
+    if (!BACnetStack_AddObject(g_deviceInstance, OBJECT_TYPE_ANALOG_INPUT, ANALOG_INPUT_INSTANCE)) {
+        fail(`Failed to add Analog Input ${ANALOG_INPUT_INSTANCE} (Bronze).`);
+    }
+    if (!BACnetStack_AddObject(g_deviceInstance, OBJECT_TYPE_BINARY_INPUT, BINARY_INPUT_INSTANCE)) {
+        fail(`Failed to add Binary Input ${BINARY_INPUT_INSTANCE} (Emerald).`);
+    }
+    if (!BACnetStack_AddObject(g_deviceInstance, OBJECT_TYPE_MULTI_STATE_INPUT, MULTI_STATE_INPUT_INSTANCE)) {
+        fail(`Failed to add Multi-State Input ${MULTI_STATE_INPUT_INSTANCE} (Hot Pink).`);
+    }
+
+    // --- Add the commandable OUTPUT objects (inherited from B-SA) ------------
+    // These accept WriteProperty. We make each one commandable below.
+    if (!BACnetStack_AddObject(g_deviceInstance, OBJECT_TYPE_ANALOG_OUTPUT, ANALOG_OUTPUT_INSTANCE)) {
+        fail(`Failed to add Analog Output ${ANALOG_OUTPUT_INSTANCE} (Chartreuse).`);
+    }
+    if (!BACnetStack_AddObject(g_deviceInstance, OBJECT_TYPE_BINARY_OUTPUT, BINARY_OUTPUT_INSTANCE)) {
+        fail(`Failed to add Binary Output ${BINARY_OUTPUT_INSTANCE} (Fuchsia).`);
+    }
+    if (!BACnetStack_AddObject(g_deviceInstance, OBJECT_TYPE_MULTI_STATE_OUTPUT, MULTI_STATE_OUTPUT_INSTANCE)) {
+        fail(`Failed to add Multi-State Output ${MULTI_STATE_OUTPUT_INSTANCE} (Indigo).`);
+    }
+
+    // --- Add the Network Port object ----------------------------------------
+    // Every BACnet device (Protocol_Revision 17+) must have at least one Network
+    // Port object describing the port it talks on. This one is the BACnet/IP
+    // application port; it is the lowest layer, so its reference port is "none".
+    // networkNumber 0 with quality "unknown" describes a local port that has not
+    // learned its network number - the right answer for a device that is not a
+    // router and has not been told one.
+    if (
+        !BACnetStack_AddNetworkPortObject(
             g_deviceInstance,
             NETWORK_PORT_INSTANCE,
-            NETWORK_PORT_NETWORK_TYPE_IPV4, // GOTCHA: this enum (ipv4 = 5) is NOT the
-            NETWORK_PORT_PROTOCOL_LEVEL_BACNET_APPLICATION, // message-callback enum (IP = 0)
+            NETWORK_PORT_NETWORK_TYPE_IPV4,
+            NETWORK_PORT_PROTOCOL_LEVEL_BACNET_APPLICATION,
             0, // networkNumber: not configured
             NETWORK_NUMBER_QUALITY_UNKNOWN,
             NETWORK_PORT_REFERENCE_PORT_NONE
         )
     ) {
-        console.error('Error: Failed to add Network Port 1 (Vermilion).');
-        process.exit(1);
+        fail("Failed to add Network Port 1 (Vermilion).");
     }
 
-    // Enable the OPTIONAL properties this example serves. SILENT TRAP: the
-    // stack enables an object's REQUIRED properties automatically, but an
-    // OPTIONAL property that is served without being ENABLED answers
-    // unknown-property before your callback is ever called - the callback is
-    // dead code that looks alive. Description and State_Text are optional.
+    // --- Enable the OPTIONAL properties we choose to expose ------------------
+    // The stack automatically enables an object's REQUIRED properties when the
+    // object is added (AddObject / AddNetworkPortObject) - so Units, Polarity,
+    // Number_Of_States, Out_Of_Service, and the Network Port's BACnet/IP
+    // addressing (IP_Address, IP_Subnet_Mask, BACnet_IP_UDP_Port, ...) are
+    // already enabled; our Get* callbacks just supply their values. Only
+    // OPTIONAL properties need SetPropertyEnabled. State_Text is optional on a
+    // Multi-State Input, so we enable it here (and serve it in
+    // GetPropertyCharacterString).
+    //
+    // The Device's Description is optional too, and it is an easy one to get
+    // wrong: serving it from a Get callback is NOT enough. The stack checks
+    // whether the property is enabled BEFORE it ever reaches the callbacks, and
+    // for an optional property that check answers "no" unless you enable it. So a
+    // Description branch in the callback without this enable is DEAD CODE, and
+    // the client reads back Error: unknown-property. Note that this fails
+    // invisibly: the callback branch looks correct and simply never runs, so you
+    // only find it by reading back the property, not by inspecting the code.
     if (!BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_DEVICE, g_deviceInstance, PROPERTY_IDENTIFIER_DESCRIPTION, true)) {
-        console.error("Error: SetPropertyEnabled failed for Device Description.");
-        process.exit(1);
+        fail("Failed to enable Description on the Device object.");
     }
     if (!BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_MULTI_STATE_INPUT, MULTI_STATE_INPUT_INSTANCE, PROPERTY_IDENTIFIER_STATE_TEXT, true)) {
-        console.error("Error: SetPropertyEnabled failed for Multi-State Input State_Text.");
-        process.exit(1);
+        fail("Failed to enable State_Text on Multi-State Input 1 (Hot Pink).");
     }
 
-    // Commandable-output plumbing, carried as {type, instance} PAIRS. For the
-    // OUTPUT types these three calls are effectively no-ops (the stack already
-    // treats them as commandable, with Present_Value required + writable) -
-    // but the calls are load-bearing the moment this block is copied to a
-    // VALUE type (Analog/Binary/Multi-State Value), where Priority_Array and
-    // Relinquish_Default default to disabled. Keep the shape.
-    const commandables: Array<[number, number]> = [
-        [OBJECT_TYPE_ANALOG_OUTPUT, ANALOG_OUTPUT_INSTANCE],
-        [OBJECT_TYPE_BINARY_OUTPUT, BINARY_OUTPUT_INSTANCE],
-        [OBJECT_TYPE_MULTI_STATE_OUTPUT, MULTI_STATE_OUTPUT_INSTANCE],
+    // Analog Output 1's optional properties: the setpoint range it accepts, and
+    // Reliability - how it says its valve actuator is not connected. Enabling
+    // Reliability also gives the FAULT bit of Status_Flags its meaning; the stack
+    // derives that bit from it.
+    const analogOutputOptionalProperties = [
+        PROPERTY_IDENTIFIER_MIN_PRES_VALUE,
+        PROPERTY_IDENTIFIER_MAX_PRES_VALUE,
+        PROPERTY_IDENTIFIER_RELIABILITY,
     ];
-    for (const [objectType, objectInstance] of commandables) {
-        if (
-            !BACnetStack_SetPropertyEnabled(g_deviceInstance, objectType, objectInstance, PROPERTY_IDENTIFIER_PRIORITY_ARRAY, true) ||
-            !BACnetStack_SetPropertyEnabled(g_deviceInstance, objectType, objectInstance, PROPERTY_IDENTIFIER_RELINQUISH_DEFAULT, true) ||
-            !BACnetStack_SetPropertyWritable(g_deviceInstance, objectType, objectInstance, PROPERTY_IDENTIFIER_PRESENT_VALUE, true)
-        ) {
-            console.error(`Error: commandable plumbing failed for object type ${objectType} instance ${objectInstance}.`);
-            process.exit(1);
+    for (const propertyIdentifier of analogOutputOptionalProperties) {
+        if (!BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_ANALOG_OUTPUT, ANALOG_OUTPUT_INSTANCE, propertyIdentifier, true)) {
+            fail(`Failed to enable property ${propertyIdentifier} on Analog Output 1 (Chartreuse).`);
         }
     }
 
-    // Announce ourselves - an unsolicited I-Am on start-up (DM-DDB-B).
-    if (!SendIAm(g_deviceInstance, g_udpPort)) {
-        console.error("Error: SendIAm failed.");
-        process.exit(1);
+    // The Simulation's test-only disconnected-valve hook (section 1b).
+    g_actuatorFaultFile = process.env[ACTUATOR_FAULT_FILE_VARIABLE] ?? "";
+
+    // --- Make the output objects commandable --------------------------------
+    // A commandable object's Present_Value is resolved from a 16-slot
+    // Priority_Array plus a Relinquish_Default: a WriteProperty sets a slot,
+    // writing NULL relinquishes it, and the highest-priority non-null slot (or
+    // Relinquish_Default) wins.
+    //
+    // WORTH KNOWING BEFORE YOU COPY THIS: for ANALOG/BINARY/MULTI-STATE OUTPUT
+    // the three calls below are effectively NO-OPS - they re-state defaults the
+    // stack already applies. On those types Present_Value is required and
+    // writable, Priority_Array and Relinquish_Default are required, and the stack
+    // treats Present_Value as commandable unconditionally. Delete this loop and
+    // these objects still accept WriteProperty.
+    //
+    // So why keep it? Because it states the commandable contract in one visible
+    // place, and because it becomes LOAD-BEARING the moment you copy this pattern
+    // to an optionally-commandable type - Analog Value, Binary Value, Multi-State
+    // Value. There Priority_Array and Relinquish_Default are OPTIONAL, and the
+    // stack requires BOTH to be enabled before it will treat the object as
+    // commandable. Omit these calls on an Analog Value and it silently is not
+    // commandable - it accepts the write and ignores it.
+    //
+    // Carry the INSTANCE alongside the type rather than assuming instance 1. On
+    // these output types the distinction is benign (see above) - but it is fatal
+    // on a Value type, where the enable must land on the exact object you mean.
+    // Say what you mean, so the pattern stays correct when it is copied.
+    const outputs = [
+        { type: OBJECT_TYPE_ANALOG_OUTPUT, instance: ANALOG_OUTPUT_INSTANCE },
+        { type: OBJECT_TYPE_BINARY_OUTPUT, instance: BINARY_OUTPUT_INSTANCE },
+        { type: OBJECT_TYPE_MULTI_STATE_OUTPUT, instance: MULTI_STATE_OUTPUT_INSTANCE },
+    ];
+    for (const output of outputs) {
+        if (
+            !BACnetStack_SetPropertyEnabled(g_deviceInstance, output.type, output.instance, PROPERTY_IDENTIFIER_PRIORITY_ARRAY, true) ||
+            !BACnetStack_SetPropertyEnabled(g_deviceInstance, output.type, output.instance, PROPERTY_IDENTIFIER_RELINQUISH_DEFAULT, true) ||
+            !BACnetStack_SetPropertyWritable(g_deviceInstance, output.type, output.instance, PROPERTY_IDENTIFIER_PRESENT_VALUE, true)
+        ) {
+            fail(`Failed to make object type ${output.type} instance ${output.instance} commandable.`);
+        }
     }
+
+    // Who-Is is answered automatically. The spec also requires a device to
+    // announce itself on start-up, so broadcast an unsolicited I-Am now (to the
+    // local subnet broadcast - the Network Port's own network).
+    SendIAm(g_deviceInstance, port, NETWORK_PORT_INSTANCE);
 
     console.log(`FYI: Device ${g_deviceInstance} ("${DEVICE_NAME}") ready. Vendor ID ${VENDOR_IDENTIFIER}. Press 'h' for help.`);
 
-    // --- The main loop -------------------------------------------------------
-    // BACnetStack_Tick() does everything: reads queued datagrams (through the
-    // receive callback), processes requests, transmits responses. It returns
-    // true while it did work, so drain it, then let the event loop breathe.
-    // 10 ms is far inside BACnet timing. (The C++ edition polls Tick() every
-    // millisecond in a while-loop; a timer is the Node-idiomatic equivalent -
-    // a deliberate, documented divergence.)
-    const tick = setInterval(() => {
+    // --- Run the stack ------------------------------------------------------
+    // The C++ edition calls BACnetStack_Tick() in a while() loop every 1 ms. In
+    // Node the event loop must stay free, so the same loop body runs from a
+    // 10 ms timer AND as soon as a datagram arrives (SimpleUDP.onDatagramQueued),
+    // so a request is answered without waiting for the timer. Tick() returns true
+    // while it did work, so it is drained; the actuator Simulation and the I-Am
+    // heartbeat step beside it.
+    let loopScheduled = false;
+    const runLoop = (): void => {
+        loopScheduled = false;
         while (BACnetStack_Tick()) {
             // drain
         }
-    }, 10);
-
-    const shutdown = () => {
-        clearInterval(tick);
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(false);
+        ActuatorSimulationTick();
+        HeartbeatTick();
+    };
+    const tickTimer = setInterval(runLoop, 10);
+    udp.onDatagramQueued = (): void => {
+        if (!loopScheduled) {
+            loopScheduled = true;
+            setImmediate(runLoop);
         }
-        process.stdin.pause();
-        udp.Shutdown();
-        console.log("FYI: stopped.");
     };
 
-    // Interactive keys (series-standard): h = help, q = quit, up/down = nudge
-    // Analog Input 1 so a client can watch the value change.
-    if (process.stdin.isTTY) {
-        readline.emitKeypressEvents(process.stdin);
-        process.stdin.setRawMode(true);
-        process.stdin.on("keypress", (_chunk, key) => {
-            if (key === undefined) {
-                return;
-            }
-            if (key.name === "q" || (key.ctrl === true && key.name === "c")) {
+    let stopKeyInput: () => void = () => undefined;
+    const shutdown = (): void => {
+        clearInterval(tickTimer);
+        udp.onDatagramQueued = null;
+        stopKeyInput();
+        udp.Shutdown();
+    };
+    stopKeyInput = StartKeyInput((key) => {
+        switch (key) {
+            case KeyCommand.Help:
+                PrintHelp(APP_NAME, APP_VERSION);
+                break;
+            case KeyCommand.Quit:
                 shutdown();
-            } else if (key.name === "h") {
-                PrintVersion(APP_NAME, APP_VERSION);
-                console.log("Keys: h = this help, q = quit, up/down = Analog Input 1 +/- 1.1");
-            } else if (key.name === "up") {
-                g_analogInput1Value += 1.1;
-                console.log(`FYI: Analog Input 1 ("Bronze") is now ${g_analogInput1Value.toFixed(1)}`);
-            } else if (key.name === "down") {
-                g_analogInput1Value -= 1.1;
-                console.log(`FYI: Analog Input 1 ("Bronze") is now ${g_analogInput1Value.toFixed(1)}`);
-            }
-        });
-    } else {
-        // Not a terminal (CI smoke test): run until killed.
-        process.on("SIGINT", shutdown);
-        process.on("SIGTERM", shutdown);
-    }
+                break;
+            case KeyCommand.ArrowUp:
+                g_analogInput1Value = Math.fround(g_analogInput1Value + Math.fround(1.1));
+                console.log(`Analog Input 1 (Bronze) = ${g_analogInput1Value.toFixed(1)} C`);
+                break;
+            case KeyCommand.ArrowDown:
+                g_analogInput1Value = Math.fround(g_analogInput1Value - Math.fround(1.1));
+                console.log(`Analog Input 1 (Bronze) = ${g_analogInput1Value.toFixed(1)} C`);
+                break;
+        }
+    });
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
 }
 
-main().catch((err) => {
-    console.error(`Error: ${err instanceof Error ? err.stack : err}`);
+main().catch((unexpected) => {
+    console.error(`Error: ${unexpected instanceof Error ? unexpected.stack : unexpected}`);
     process.exit(1);
 });
