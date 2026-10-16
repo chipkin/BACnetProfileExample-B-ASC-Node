@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - unreleased
+## [1.1.1] - unreleased
+
+### Security
+
+- `package.json` overrides `adm-zip` to `^0.6.1` (lockfile: 0.5.18 -> 0.6.1). It is
+  a devDependency of the CAS BACnet Stack's npm package that npm workspaces
+  install here, unused by this example and the stack, and 0.5.18 has five
+  open advisories (Dependabot). Wire Tests unchanged; `npm audit` reports 0
+  vulnerabilities. Stack-side removal: [cas-bacnet-stack#3971](https://github.com/chipkin/cas-bacnet-stack/issues/3971).
+
+## [1.1.0] - 2026-10-16
 
 Profile-functional (series bar): a faithful port of
 `BACnetProfileExample-B-ASC-CPP` v1.4.0. The controller performs the B-ASC
