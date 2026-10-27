@@ -40,13 +40,20 @@ def split_command(command):
             for word in words]
 
 
-def start(command, arguments, label, environment=None):
-    """wiretest.start for a command line: the first word is the program, the rest come
-    before `arguments`."""
+def command_line(command):
+    """The command as a list to run: its program looked up on PATH, and a relative path
+    that exists made absolute."""
     words = split_command(command)
     if not words:
         sys.exit("--exe is empty")
     program = shutil.which(words[0]) or words[0]
     rest = [str(Path(word).resolve()) if not word.startswith("-") and os.path.exists(word) else word
             for word in words[1:]]
-    return wiretest.start(program, rest + list(arguments), label, environment)
+    return [program] + rest
+
+
+def start(command, arguments, label, environment=None):
+    """wiretest.start for a command line: the first word is the program, the rest come
+    before `arguments`."""
+    words = command_line(command)
+    return wiretest.start(words[0], words[1:] + list(arguments), label, environment)

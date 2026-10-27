@@ -3,6 +3,23 @@
 All notable changes to the vendored Node.js `common/` helpers. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.0] - unreleased
+
+The C++ `common/` 3.5.0 `--deviceName` option, for the Node.js edition.
+Additive: an example that does not use it prints and behaves as with 3.0.0.
+
+### Added
+
+- `ParseDeviceNameArg(argv, defaultDeviceName)`: the Device object's
+  Object_Name from `--deviceName <text>`, the same rules as the C++ edition -
+  1..`MAX_DEVICE_NAME_LENGTH` (255) bytes of UTF-8, no control characters;
+  anything else prints a warning and keeps the default. Object_Name must be
+  unique across the BACnet internetwork (cl. 12.1.1.4), so it has to be
+  configurable per unit, like the instance.
+- `HandleHelpAndVersionArgs(..., showDeviceNameCliOption = false)`: pass `true`
+  when the example reads `--deviceName`, and `--help` lists it. The default
+  prints exactly what 3.0.0 printed.
+
 ## [3.0.0] - 2026-10-16
 
 Brings the Node `common/` in line with the conventions of the C++ `common/`

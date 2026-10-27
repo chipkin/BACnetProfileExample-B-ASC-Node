@@ -32,7 +32,7 @@ This repository is self-contained:
 - `wiretest/` - the series' shared Python Wiretest Harness, vendored
   **verbatim** (0.7.0). Never edit it here; report a needed change instead.
 - `common/` - the shared Node.js helper (SimpleUDP, CASExampleHelper,
-  constants), vendored in (3.0.0). Never edit here alone: a change must be
+  constants), vendored in (3.1.0). Never edit here alone: a change must be
   swept to every sibling Node example and `COMMON_VERSION` bumped with a
   `common/CHANGELOG.md` entry.
 - `README.md` - what this example is. Keep it short and about THIS example
@@ -47,7 +47,7 @@ This repository is self-contained:
 - `docs/objects.json` - the input to that generator. Update it in the same
   change as any `main.ts` change that adds an object or a `Get*` branch.
 - `submodules/cas-bacnet-stack` - the **CAS BACnet Stack** as a git submodule
-  (private; pinned to `6.x` @ `64b2cfac5`, stack 6.0.23), consumed via **npm
+  (private; pinned to `6.x` @ `69b6249f`, stack 6.0.23), consumed via **npm
   workspaces**; the Node adapter (`adapters/node/`) is used in place from it,
   never copied. Per the series ADR 0001, the pin moves to the latest `6.x`
   whenever this example is updated. After cloning, run
@@ -80,7 +80,8 @@ C++17 toolchain. The addon is built from the pinned submodule, never pulled
 from a registry.
 
 **The stack binary is never committed and never released.** The addon
-(`submodules/cas-bacnet-stack/build/Release/cas-bacnet-stack.node`) is build
+(`submodules/cas-bacnet-stack/projects/npm/build/Release/cas-bacnet-stack.node`;
+the stack keeps its `binding.gyp` in `projects/npm/`) is build
 output; `.gitignore` covers `*.node`, `*.dll`, `*.so*`, `*.lib`, `*.a` and
 friends, and `.github/workflows/release.yml` publishes source only. Check:
 `git ls-files | grep -iE '\.(dll|so|node|lib|a)$'` prints nothing.
@@ -88,7 +89,7 @@ friends, and `.github/workflows/release.yml` publishes source only. Check:
 ## Run
 
 ```bash
-npm start [-- --port 47821 --deviceID N --dcc-password S]   # node dist/main.js
+npm start [-- --port 47821 --deviceID N --deviceName "<name>" --dcc-password S]   # node dist/main.js
 npm run typecheck                                           # tsc --noEmit
 ```
 

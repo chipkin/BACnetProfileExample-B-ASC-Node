@@ -21,7 +21,7 @@ older pin.
 | File | What it is |
 |---|---|
 | `SimpleUDP.ts` | The UDP socket the application owns: bind, queue inbound datagrams, send. The stack never touches the socket - it pulls datagrams through the receive callback. |
-| `CASExampleHelper.ts` | `RegisterCommonCallbacks()` (receive/send/system-time + the 6-byte IPv4 connection string, port big-endian, written here ONCE; one `RX`/`TX` console line per frame), `SendIAm()`, `DiscoverPrimaryIPv4()` / `GetLocalIPv4()`, the CLI helpers, `PrintVersion()` / `PrintHelp()`, and the interactive keys (`StartKeyInput()`). |
+| `CASExampleHelper.ts` | `RegisterCommonCallbacks()` (receive/send/system-time + the 6-byte IPv4 connection string, port big-endian, written here ONCE; one `RX`/`TX` console line per frame), `SendIAm()`, `DiscoverPrimaryIPv4()` / `GetLocalIPv4()`, the CLI helpers (`--help`, `--version`, `--deviceID`, `--deviceName` with `ParseDeviceNameArg()`, `--port`, `--dcc-password`), `PrintVersion()` / `PrintHelp()`, and the interactive keys (`StartKeyInput()`). |
 | `CASBACnetStackExampleConstants.ts` | The handful of BACnet enumeration values this example uses - same constant names as the C++ edition's header, so the two languages diff 1:1. |
 
 ## How main.ts uses it

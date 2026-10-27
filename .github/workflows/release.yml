@@ -19,10 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # windows-2022: Visual Studio 2022 (v143), the toolset the stack's own
-        # workflows build with. (Node 24.21's npm, node-gyp 12, also finds
-        # Visual Studio 2026 on newer images.)
-        os: [windows-2022, ubuntu-latest]
+        # windows-2025: the Visual Studio 2026 image (v145), the toolset the
+        # stack's own release workflow builds with. Node 24.21's npm (node-gyp
+        # 12) finds Visual Studio 2026; Visual Studio 2022 also still works.
+        os: [windows-2025, ubuntu-latest]
     steps:
       # The stack's MSVC intermediate paths mirror its source tree - without
       # long paths a deep runner workspace fails with "Cannot open source file".

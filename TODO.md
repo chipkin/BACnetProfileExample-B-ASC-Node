@@ -1,7 +1,9 @@
 # TODO
 
 Defects found while porting this example to stack `6.x` @ `64b2cfac5` (Node
-package 6.1.2), each with its upstream issue and evidence.
+package 6.1.2), each with its upstream issue and evidence. Re-checked at the
+pin `6.x` @ `29b83de6`: still present. **Fixed at the current pin, `6.x` @
+`69b6249f`** (see Status below); kept here as the record.
 
 ## Adapter defect, [cas-bacnet-stack#3969](https://github.com/chipkin/cas-bacnet-stack/issues/3969): the DeviceCommunicationControl wrapper hands JS an unseeded errorCode Buffer
 
@@ -35,3 +37,16 @@ gets password-failure rather than a garbage code. The garbage copied back on a
 **Workaround.** None needed; `main.ts` names the error on every `false` return
 (the same contract the C++ reference documents). Not patched here: the adapter
 is used in place from the submodule.
+
+**Status at `6.x` @ `69b6249f`: fixed.** The wrapper now allocates a 4-byte
+buffer, seeds it from the stack's `*errorCode` (zero when none) and copies it
+back only into a non-null `errorCode`. `main.ts` is unchanged: its
+`errorCode.writeUInt32LE(..., 0)` fits the 4-byte buffer, and
+`tests/dcc_test.py` passes at this pin.
+
+## Open items at v1.2.0
+
+None in the example or the stack. The BTL run has no FAIL. Four DeviceCommunicationControl
+rows (9.24.1.6, .8, .9, .10) are skipped because the test tool cannot hear the
+unsolicited I-Am heartbeat that DISABLE_INITIATION silences (ref:
+`chipkin/chipkin-bacnet-testing-tool#355`). Not a defect in this example.

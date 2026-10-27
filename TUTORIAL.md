@@ -63,7 +63,9 @@ plaintext and is a guard against accidents, not an attacker.
 **Change the device identity before you ship** - vendor ID, vendor name, model
 name, description, firmware revision, device name and the DCC password are all
 in the `CHANGE ALL OF THIS BEFORE YOU SHIP` block at the top of `main.ts`,
-with a per-field note on each saying what to change it to. That block is the
+with a per-field note on each saying what to change it to. The device name
+there is only the default: each unit takes its own with `--deviceName` at
+start-up, as it takes its instance with `--deviceID`. That block is the
 authoritative checklist; it is in the source rather than here so it cannot be
 skipped by someone who only reads the code.
 

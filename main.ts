@@ -46,7 +46,8 @@
 // Each object has a colour name (the convention shared across this example
 // series):
 //
-//     Device 389003            "Chipkin Example B-ASC"     (instance configurable with --deviceID)
+//     Device 389003            "Chipkin Example B-ASC"     (instance configurable with --deviceID,
+//                                                           Object_Name with --deviceName)
 //     Analog Input  1          "Bronze"      (REAL, degrees Celsius; read-only - the temperature the valve produces)
 //     Binary Input  1          "Emerald"     (active / inactive; read-only - the relay's feedback contact)
 //     Multi-State Input 1      "Hot Pink"    (state 1..3; read-only - the speed the drive is running at)
@@ -81,7 +82,7 @@
 // Interactive keys (handled by the shared helper): h = help, q = quit,
 // up/down = disturb the simulated temperature (Analog Input 1) by +/-1.1; the
 // valve then brings it back to the setpoint. Command line: --port <n>,
-// --deviceID <n>, --dcc-password <string>.
+// --deviceID <n>, --deviceName <text>, --dcc-password <string>.
 //
 // All the UDP/stack plumbing lives in common/CASExampleHelper so this file can
 // stay focused on the BACnet logic.
@@ -175,6 +176,7 @@ import {
     KeyCommand,
     ParseDccPasswordArg,
     ParseDeviceIdArg,
+    ParseDeviceNameArg,
     ParsePortArg,
     PrintHelp,
     PrintVersion,
@@ -188,7 +190,7 @@ import { SimpleUDP } from "./common/SimpleUDP";
 // 1. Example + device configuration
 // -----------------------------------------------------------------------------
 const APP_NAME = "BACnet B-ASC (Application Specific Controller) Example - Node";
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
 // to 389003 and can be overridden on the command line with --deviceID.
@@ -211,16 +213,19 @@ let g_deviceInstance = 389003;
 // Update VENDOR_NAME below to match.
 const VENDOR_IDENTIFIER = 389;
 
-// The Device object's Object_Name.
+// The Device object's Object_Name - the DEFAULT one.
 //
 // THIS IS THE ONE THAT WILL BITE YOU. Object_Name must be unique across the
-// whole BACnet internetwork, and here it is a constant. The device instance is
-// runtime-configurable via --deviceID, so it is easy to ship two units,
-// configure their instances correctly, and still have BOTH announce Object_Name
-// "Chipkin Example B-ASC" - a spec violation, and a hard BTL failure. In a real
-// product Object_Name must be per-unit configurable too: derive it from a serial
-// number, DIP switches, a config file, or add a --deviceName argument.
+// whole BACnet internetwork (cl. 12.1.1.4), so it must be per-unit configurable,
+// exactly like the instance. This example takes it at start-up with
+// --deviceName <text> (common/ ParseDeviceNameArg, read into g_deviceName in
+// main()); DEVICE_NAME is only what a unit announces when nobody configured it.
+// Ship two units without --deviceName and BOTH announce the same Object_Name - a
+// spec violation, and a hard BTL failure. In your product, configure the name
+// per unit (a serial number, DIP switches, a config file, or this argument) and
+// change the default below to something that says "not configured yet".
 const DEVICE_NAME = "Chipkin Example B-ASC";
+let g_deviceName = DEVICE_NAME; // --deviceName, or the default
 
 // The Device object's Description. Change it to what YOUR device actually is;
 // this string describes this tutorial.
@@ -874,8 +879,9 @@ function ReturnCharacterString(
 ): boolean {
     const bytes = Buffer.from(text, "utf8");
     // Truncate SILENTLY to fit the stack's buffer. maxElementCount is
-    // MAX_CHARACTER_STRING_SIZE (256 in this build), and our longest string
-    // (DEVICE_DESCRIPTION) fits with room to spare - so this never trips here.
+    // MAX_CHARACTER_STRING_SIZE (256 in this build), and our longest strings
+    // fit: DEVICE_DESCRIPTION with room to spare, and a --deviceName, which
+    // ParseDeviceNameArg caps at 255 bytes - so this never trips here.
     // If you lengthen any served string, check it against that limit, or make
     // this truncation loud.
     const length = Math.min(bytes.length, maxElementCount);
@@ -930,7 +936,7 @@ function GetPropertyCharacterString(
     // Object_Name - the colour name for each object.
     if (propertyIdentifier === PROPERTY_IDENTIFIER_OBJECT_NAME) {
         if (objectType === OBJECT_TYPE_DEVICE && objectInstance === g_deviceInstance) {
-            return serve(DEVICE_NAME);
+            return serve(g_deviceName);
         }
         if (objectType === OBJECT_TYPE_ANALOG_INPUT && objectInstance === ANALOG_INPUT_INSTANCE) {
             return serve("Bronze");
@@ -1295,11 +1301,14 @@ async function main(): Promise<void> {
 
     // --- Command line + version --------------------------------------------
     // --help / --version print and exit, so handle them before we bind a socket.
-    if (HandleHelpAndVersionArgs(argv, APP_NAME, APP_VERSION)) {
+    // `true, true`: --help lists --dcc-password and --deviceName, both of which
+    // this example reads.
+    if (HandleHelpAndVersionArgs(argv, APP_NAME, APP_VERSION, true, true)) {
         return;
     }
     const port = ParsePortArg(argv, 47808);
     g_deviceInstance = ParseDeviceIdArg(argv, g_deviceInstance);
+    g_deviceName = ParseDeviceNameArg(argv, DEVICE_NAME);
     g_dccPassword = ParseDccPasswordArg(argv, DEFAULT_DCC_PASSWORD);
     PrintVersion(APP_NAME, APP_VERSION);
     if (g_dccPassword !== "") {
@@ -1523,7 +1532,7 @@ async function main(): Promise<void> {
     // local subnet broadcast - the Network Port's own network).
     SendIAm(g_deviceInstance, port, NETWORK_PORT_INSTANCE);
 
-    console.log(`FYI: Device ${g_deviceInstance} ("${DEVICE_NAME}") ready. Vendor ID ${VENDOR_IDENTIFIER}. Press 'h' for help.`);
+    console.log(`FYI: Device ${g_deviceInstance} ("${g_deviceName}") ready. Vendor ID ${VENDOR_IDENTIFIER}. Press 'h' for help.`);
 
     // --- Run the stack ------------------------------------------------------
     // The C++ edition calls BACnetStack_Tick() in a while() loop every 1 ms. In

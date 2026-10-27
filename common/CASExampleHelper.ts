@@ -15,7 +15,7 @@
 //   - SendIAm(): the unsolicited I-Am every example transmits on start-up.
 //   - GetLocalIPv4(): the primary interface's address/netmask/broadcast (the
 //     OS-level plumbing the Network Port object reports).
-//   - CLI helpers (--help/--version/--deviceID/--port/--dcc-password),
+//   - CLI helpers (--help/--version/--deviceID/--deviceName/--port/--dcc-password),
 //     PrintVersion(), PrintHelp(), and the interactive keys (StartKeyInput()).
 //
 // The stack PULLS datagrams: its receive callback asks for one queued datagram
@@ -47,7 +47,7 @@ import {
 } from "@chipkin/cas-bacnet-stack";
 import { SimpleUDP } from "./SimpleUDP";
 
-export const COMMON_VERSION = "3.0.0"; // Node common - see common/CHANGELOG.md
+export const COMMON_VERSION = "3.1.0"; // Node common - see common/CHANGELOG.md
 
 // ---------------------------------------------------------------------------
 // Local IPv4 discovery
@@ -434,13 +434,16 @@ export function PrintHelp(appName: string, appVersion: string): void {
 /**
  * Handle --help / --version. Prints and returns true if the process should
  * exit. `showDccPasswordCliOption` lists --dcc-password in the help, for an
- * example that parses it (ParseDccPasswordArg).
+ * example that parses it (ParseDccPasswordArg). `showDeviceNameCliOption`
+ * lists --deviceName, for an example that reads it (ParseDeviceNameArg; added
+ * in 3.1.0 - the default, false, prints exactly what 3.0.0 printed).
  */
 export function HandleHelpAndVersionArgs(
     argv: string[],
     appName: string,
     appVersion: string,
-    showDccPasswordCliOption = true
+    showDccPasswordCliOption = true,
+    showDeviceNameCliOption = false
 ): boolean {
     for (const argument of argv) {
         if (argument === "--help" || argument === "-h" || argument === "/?") {
@@ -454,6 +457,13 @@ export function HandleHelpAndVersionArgs(
             console.log("  --deviceID <n>    BACnet device instance (0..4194302). Each example in");
             console.log("                    this series has its own default so several can run on");
             console.log("                    one subnet at once.");
+            if (showDeviceNameCliOption) {
+                console.log("  --deviceName <text>");
+                console.log(`                    The Device object's Object_Name (1..${MAX_DEVICE_NAME_LENGTH} bytes, no`);
+                console.log("                    control characters). It must be unique across the BACnet");
+                console.log("                    internetwork, so give every unit its own. Default: this");
+                console.log("                    example's own name.");
+            }
             console.log("  --port <n>        BACnet/IP UDP port (1..65535). Default 47808 (0xBAC0).");
             console.log("                    Use a non-default port to avoid clashing with another");
             console.log("                    BACnet device already on 47808 on this host.");
@@ -511,6 +521,44 @@ export function ParseDeviceIdArg(argv: string[], defaultDeviceId: number): numbe
         }
     }
     return defaultDeviceId;
+}
+
+/** The longest Device Object_Name --deviceName accepts, in UTF-8 bytes. */
+export const MAX_DEVICE_NAME_LENGTH = 255;
+
+/**
+ * The Device object's Object_Name to use: the value after "--deviceName" if
+ * present and valid, else `defaultDeviceName`. Object_Name must be unique across
+ * the BACnet internetwork (cl. 12.1.1.4, 12.11), so two units that share a
+ * compile-time name are non-conformant the moment both are installed; this makes
+ * it per-unit configurable at start-up, the way --deviceID makes the instance
+ * configurable. Valid = 1..MAX_DEVICE_NAME_LENGTH bytes of UTF-8 and no control
+ * characters (a name must be printable); anything else prints a warning and
+ * keeps the default. The same rules as the C++ edition's ParseDeviceNameArg().
+ */
+export function ParseDeviceNameArg(argv: string[], defaultDeviceName: string): string {
+    for (let argumentIndex = 0; argumentIndex + 1 < argv.length; ++argumentIndex) {
+        if (argv[argumentIndex] !== "--deviceName") {
+            continue;
+        }
+        const name = argv[argumentIndex + 1];
+        const length = Buffer.byteLength(name, "utf8");
+        let printable = length > 0 && length <= MAX_DEVICE_NAME_LENGTH;
+        for (let characterIndex = 0; characterIndex < name.length; ++characterIndex) {
+            const code = name.charCodeAt(characterIndex);
+            if (code < 0x20 || code === 0x7f) {
+                printable = false;
+            }
+        }
+        if (printable) {
+            return name;
+        }
+        console.log(
+            `Warning: ignoring invalid --deviceName (want 1..${MAX_DEVICE_NAME_LENGTH} bytes, no control characters); ` +
+                `using "${defaultDeviceName}".`
+        );
+    }
+    return defaultDeviceName;
 }
 
 export function ParseDccPasswordArg(argv: string[], defaultPassword: string): string {

@@ -29,11 +29,11 @@ Stack addon locally (see [Build](#build) below).
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.1.0**, built and verified
-> against **CAS BACnet Stack 6.0.23** (`6.x` @ `64b2cfac5`; its Node package
+> **Versions:** this document describes **example v1.2.0**, built and verified
+> against **CAS BACnet Stack 6.0.23** (`6.x` @ `69b6249f`; its Node package
 > `@chipkin/cas-bacnet-stack` 6.1.2, built as the production addon), at
 > **Protocol_Revision 30**, with the vendored Node `common/` helper at
-> **v3.0.0**, on **Node.js 24.21**. Running the example prints the example,
+> **v3.1.0**, on **Node.js 24.21**. Running the example prints the example,
 > stack and `common/` versions - if what it prints disagrees with this line,
 > trust the program and check `CHANGELOG.md`.
 >
@@ -225,7 +225,7 @@ Every required property of every object, and who answers it, is in
 This example **builds against the CAS BACnet Stack, which is a commercial
 Chipkin product** - it is not free or open source, and there is no
 public/trial build. The stack is referenced here as the **private** git
-submodule `submodules/cas-bacnet-stack` (pinned to `6.x` @ `64b2cfac5`) and
+submodule `submodules/cas-bacnet-stack` (pinned to `6.x` @ `69b6249f`) and
 consumed as an **npm workspace**: `npm install` compiles it from source into a
 native Node addon and builds the package's TypeScript layer. You can only fetch
 and build it once you have a CAS BACnet Stack license and access to that
@@ -257,7 +257,8 @@ This is a **self-contained** project. It ships:
   (`submodules/cas-bacnet-stack/adapters/node/`); nothing of it is copied here.
 
 The stack binary - the addon `cas-bacnet-stack.node`, written to
-`submodules/cas-bacnet-stack/build/Release/` - is **never committed and never
+`submodules/cas-bacnet-stack/projects/npm/build/Release/` (the stack keeps its
+`binding.gyp` in `projects/npm/`) - is **never committed and never
 released**: `.gitignore` covers it, and a tagged release carries source only.
 Build it yourself from the submodule with `npm install`.
 
@@ -311,6 +312,7 @@ first - the install needs the stack submodule.
 npm start                      # defaults: device 389003, UDP 47808
 npm start -- --port 47821      # non-default port (recommended while testing)
 npm start -- --deviceID 12345  # your own device instance
+npm start -- --deviceID 12345 --deviceName "Chipkin Example B-ASC Unit 2"  # and its own name
 npm start -- --dcc-password s3cret   # require a DeviceCommunicationControl password
 npm start -- --help
 ```
@@ -319,9 +321,9 @@ npm start -- --help
 `main.ts`. Expected output:
 
 ```
-BACnet B-ASC (Application Specific Controller) Example - Node v1.1.0
+BACnet B-ASC (Application Specific Controller) Example - Node v1.2.0
 CAS BACnet Stack version: 6.0.23.0
-Common helper (common/) version: 3.0.0
+Common helper (common/) version: 3.1.0
 FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
 TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
 FYI: Device 389003 ("Chipkin Example B-ASC") ready. Vendor ID 389. Press 'h' for help.
@@ -347,6 +349,7 @@ firewall. To use a different port, pass `--port` (see below).
 |--------|---------|---------|
 | `--port <n>` | `47808` | UDP port to listen on (BACnet/IP). |
 | `--deviceID <n>` | `389003` | The device's BACnet instance number (BACnet requires this to be configurable). |
+| `--deviceName <text>` | `Chipkin Example B-ASC` | The Device object's `Object_Name`, 1..255 bytes, no control characters. It must be unique across the BACnet internetwork, so give every unit its own (BACnet requires it to be configurable, like the instance). An invalid value prints a warning and keeps the default. |
 | `--dcc-password <string>` | none | Require this password on DeviceCommunicationControl. Prints `FYI: DeviceCommunicationControl requires a password` at start-up (never the password). |
 | `--help`, `-h` | - | Show usage and exit. |
 | `--version` | - | Print the example, stack, and `common/` helper versions, then exit. |
@@ -410,10 +413,13 @@ The checks above, automated: a Python BACnet client (the Peer) drives the runnin
 example over BACnet/IP from outside it. Python 3 standard library only. They are
 the C++ edition's Wire Tests, unchanged except that `--exe` takes a command line
 (`tests/launch.py`), so they prove the two editions behave the same.
+`configuration_test.py`'s `--help` check names the options this port reads (it
+has no `--xml`).
 
 | Script | What it proves |
 |---|---|
 | `discovery_test.py` | Who-Is, the Device's `Object_List`, then for every object its `Property_List` and a ReadProperty of every property it lists - every read comes back as a value. |
+| `configuration_test.py` | The Device's identity is configurable at start-up: with `--deviceID 389903 --deviceName "Chipkin Example B-ASC Unit 2"`, Who-Is, ReadProperty `Object_Name` and Who-Has by name all see the configured instance and name (and 389003 is gone); without them, the defaults; an empty or 256-byte name keeps the default with a warning, a 255-byte one is kept whole. `--help` lists exactly the options the example reads. |
 | `commanding_test.py` | Commands each output at two priorities; `Present_Value`, `Priority_Array` and `Current_Command_Priority` follow the winning command, and the feedback input follows it too (the B-SA Profile Function, which a B-ASC includes). |
 | `failure_modes_test.py` | A disconnected valve (`no-output`, FAULT, command accepted but not obeyed), out-of-range writes, a write to an input. |
 | `dcc_test.py` | **The B-ASC Profile Function.** With `--dcc-password`: the heartbeat runs; wrong / missing password and deprecated `disable` are refused and it keeps running; `disable-initiation` stops it while ReadProperty, WriteProperty and Who-Is are still answered; `enable` resumes it; a 1-minute `disable-initiation` ends by itself. About 2.5 minutes. |
