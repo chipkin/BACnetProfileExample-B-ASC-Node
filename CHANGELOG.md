@@ -8,7 +8,29 @@ and this project adheres to
 
 ## [Unreleased]
 
-_No changes yet._
+## [1.2.1] - 2026-11-02
+
+Built on CAS BACnet Stack 6.x (`1e7dffe2b`, stack 6.0.23, Node package 6.1.2).
+
+### Changed
+
+- **Updated to CAS BACnet Stack 6.x `1e7dffe2b`.** The README and PICS name the
+  new version.
+- **A BACnet client on the same computer still hears the device's I-Am and
+  I-Have** (`common/CASExampleHelper.ts`). This stack version leaves the address
+  of a broadcast it chooses itself, such as the I-Am that answers a Who-Is, to the
+  application, and the example sends it to the local subnet broadcast address.
+  That reaches only the device's own UDP port, so the example also sends the same
+  frame as a unicast to the last client that wrote to it from another UDP port.
+- **README:** the profile example table is the same in every example. The five
+  blocked examples (B-ACC, B-AACC, B-AS, B-ACCR, B-DAP) name the stack issue they
+  wait on, and B-LSC is no longer marked in progress.
+
+### Fixed
+
+- **VeriBACnet re-run command** (`tests/veribacnet/README.md`) now starts the
+  example with the DeviceCommunicationControl password the project declares.
+  Without it the two password tests (135.1 cl. 9.24.2.1 and 9.24.2.2) fail.
 
 ## [1.2.0] - 2026-10-27
 

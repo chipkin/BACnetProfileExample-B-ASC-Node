@@ -265,6 +265,11 @@ function ipToOctets(ip: string): number[] {
  *   for this socket (these examples: NETWORK_PORT_INSTANCE, 1).
  */
 export function RegisterCommonCallbacks(udp: SimpleUDP, networkPortInstance: number): void {
+    // The last peer that sent to this socket from a UDP port other than the bound
+    // one (for example a test tool on this same PC, which cannot share our port).
+    // See the send callback below.
+    let peer: { ip: string; port: number } | undefined;
+
     BACnetStack_RegisterCallbackReceiveMessageForPort(
         (
             message: Buffer,
@@ -295,6 +300,12 @@ export function RegisterCommonCallbacks(udp: SimpleUDP, networkPortInstance: num
                 `RX ${length} bytes from ${datagram.fromIp}:${datagram.fromPort} ` +
                     `(Network Port ${networkPortInstance}) - ${SummarizeBacnetFrame(datagram.message.subarray(0, length))}`
             );
+            // A BACnet/IP broadcast reaches only the bound UDP port, so a tool on
+            // this host on another port would never hear the answer to its Who-Is.
+            // Remember the last such peer; the send callback also unicasts to it.
+            if (datagram.fromPort !== udp.Port()) {
+                peer = { ip: datagram.fromIp, port: datagram.fromPort };
+            }
             // 6-byte IPv4 connection string: 4 IP octets, then the port BIG-endian.
             const fromOctets = ipToOctets(datagram.fromIp);
             sourceConnectionString[0] = fromOctets[0];
@@ -339,7 +350,9 @@ export function RegisterCommonCallbacks(udp: SimpleUDP, networkPortInstance: num
             let toIp: string;
             let toPort: number;
             let isBroadcast = broadcast;
+            let stringless = false;
             if (connectionStringLength === 0) {
+                stringless = true;
                 toIp = local.broadcast;
                 toPort = udp.Port();
                 isBroadcast = true;
@@ -358,6 +371,18 @@ export function RegisterCommonCallbacks(udp: SimpleUDP, networkPortInstance: num
                 `TX ${sent} bytes to ${toIp}:${toPort}${isBroadcast ? " (broadcast)" : ""} ` +
                     `(Network Port ${networkPortInstance}) - ${SummarizeBacnetFrame(frame)}`
             );
+            // Stack 6.x (1e7dffe2b) leaves the address of a broadcast it chooses
+            // itself (the I-Am answering a Who-Is, I-Have, I-Am-Router-To-Network,
+            // Network-Number-Is) to the host, and it went to the subnet broadcast
+            // above. That reaches only the bound UDP port, so also send the same
+            // frame unicast to the last peer that was on another port.
+            if (stringless && peer !== undefined) {
+                const peerSent = udp.Send(frame, peer.ip, peer.port);
+                console.log(
+                    `TX ${peerSent} bytes to ${peer.ip}:${peer.port} (peer on another port) ` +
+                        `(Network Port ${networkPortInstance}) - ${SummarizeBacnetFrame(frame)}`
+                );
+            }
             return sent;
         }
     );

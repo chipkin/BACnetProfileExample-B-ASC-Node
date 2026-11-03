@@ -35,14 +35,15 @@ identity string), change these files to match, the same way you would update
    this repository:
 
    ```
-   node dist/main.js --port 47828 --deviceID 389003
+   node dist/main.js --port 47828 --deviceID 389003 --dcc-password Chipkin-DCC-42
    ```
 
    Wait until it prints `FYI: Device 389003 ("Chipkin Example B-ASC") ready.`
    Use port 47828, not the standard 47808, so the test does not collide with
-   other BACnet software on the machine. Start it without `--dcc-password`
-   (the shipped default, no password): the project carries no
-   DeviceCommunicationControl password. Leave it running.
+   other BACnet software on the machine. The project declares this
+   DeviceCommunicationControl password (a test value), so start it with
+   `--dcc-password` as shown; without it the two password tests (9.24.2.1,
+   9.24.2.2) fail. Leave it running.
 3. In a second terminal, from the root of this repository:
 
    ```

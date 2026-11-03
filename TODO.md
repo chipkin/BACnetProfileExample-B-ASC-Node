@@ -2,8 +2,9 @@
 
 Defects found while porting this example to stack `6.x` @ `64b2cfac5` (Node
 package 6.1.2), each with its upstream issue and evidence. Re-checked at the
-pin `6.x` @ `29b83de6`: still present. **Fixed at the current pin, `6.x` @
-`69b6249f`** (see Status below); kept here as the record.
+pin `6.x` @ `29b83de6`: still present. **Fixed since the pin `6.x` @
+`69b6249f`, and still fixed at the current pin, `6.x` @ `1e7dffe2b`** (see
+Status below); kept here as the record.
 
 ## Adapter defect, [cas-bacnet-stack#3969](https://github.com/chipkin/cas-bacnet-stack/issues/3969): the DeviceCommunicationControl wrapper hands JS an unseeded errorCode Buffer
 
@@ -44,9 +45,11 @@ back only into a non-null `errorCode`. `main.ts` is unchanged: its
 `errorCode.writeUInt32LE(..., 0)` fits the 4-byte buffer, and
 `tests/dcc_test.py` passes at this pin.
 
-## Open items at v1.2.0
+## Open items at v1.2.1
 
 None in the example or the stack. The BTL run has no FAIL. Four DeviceCommunicationControl
 rows (9.24.1.6, .8, .9, .10) are skipped because the test tool cannot hear the
-unsolicited I-Am heartbeat that DISABLE_INITIATION silences (ref:
-`chipkin/chipkin-bacnet-testing-tool#355`). Not a defect in this example.
+unsolicited I-Am heartbeat that DISABLE_INITIATION silences when it runs on the
+same computer as the device (the heartbeat is broadcast to the device's own UDP
+port). A limit of the test tool, not a defect in this example; `tests/dcc_test.py`
+covers silencing and resuming the heartbeat.

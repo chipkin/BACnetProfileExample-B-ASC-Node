@@ -190,7 +190,7 @@ import { SimpleUDP } from "./common/SimpleUDP";
 // 1. Example + device configuration
 // -----------------------------------------------------------------------------
 const APP_NAME = "BACnet B-ASC (Application Specific Controller) Example - Node";
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
 // to 389003 and can be overridden on the command line with --deviceID.

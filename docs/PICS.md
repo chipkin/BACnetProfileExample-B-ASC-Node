@@ -18,7 +18,7 @@ see [README.md](../README.md).
 | **Vendor Identifier** | 389 |
 | **Product Name** | CAS BACnet Stack Example - B-ASC |
 | **Product Model Number** | CAS BACnet Stack Example - B-ASC |
-| **Application Software Version** | 1.2.0 |
+| **Application Software Version** | 1.2.1 |
 | **Firmware Revision** | 6.0.23.0 (the CAS BACnet Stack version) |
 | **BACnet Protocol Version** | 1 |
 | **BACnet Protocol Revision** | 30 |
@@ -93,7 +93,7 @@ are supported (K.5.6), as are indefinite ones.
 
 Segmentation is **supported in both directions**
 (`Segmentation_Supported` = `segmented-both`), by the stack: at `6.x` @
-`69b6249f` the customer build - here the Node addon's production build
+`1e7dffe2b` the customer build - here the Node addon's production build
 (`bacnet_testtool=0`) - compiles `STACK_OPTION_SEGMENTATION` in (stack
 #2992), and this example keeps the stack's defaults - `Max_Segments_Accepted`
 16 and `APDU_Segment_Timeout` 5000 ms. Table 12-13 footnote 1: "These

@@ -143,7 +143,7 @@ object-name: "Chipkin Example B-ASC"
 object-type: DEVICE
 apdu-segment-timeout: 5000
 apdu-timeout: 10000
-application-software-version: "1.2.0"
+application-software-version: "1.2.1"
 description: "Chipkin CAS BACnet Stack example - B-ASC (Application Specific Controller) profile. Demonstrates DS-RP-B + DS-WP-B + DM-DCC-B: ReadProperty, WriteProperty, and DeviceCommunicationControl with read-only sensor inputs and commandable outputs."
 device-address-binding: ?
 firmware-revision: "6.0.23.0"

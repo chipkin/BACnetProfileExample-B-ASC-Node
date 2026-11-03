@@ -29,8 +29,8 @@ Stack addon locally (see [Build](#build) below).
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.2.0**, built and verified
-> against **CAS BACnet Stack 6.0.23** (`6.x` @ `69b6249f`; its Node package
+> **Versions:** this document describes **example v1.2.1**, built and verified
+> against **CAS BACnet Stack 6.0.23** (`6.x` @ `1e7dffe2b`; its Node package
 > `@chipkin/cas-bacnet-stack` 6.1.2, built as the production addon), at
 > **Protocol_Revision 30**, with the vendored Node `common/` helper at
 > **v3.1.0**, on **Node.js 24.21**. Running the example prints the example,
@@ -225,7 +225,7 @@ Every required property of every object, and who answers it, is in
 This example **builds against the CAS BACnet Stack, which is a commercial
 Chipkin product** - it is not free or open source, and there is no
 public/trial build. The stack is referenced here as the **private** git
-submodule `submodules/cas-bacnet-stack` (pinned to `6.x` @ `69b6249f`) and
+submodule `submodules/cas-bacnet-stack` (pinned to `6.x` @ `1e7dffe2b`) and
 consumed as an **npm workspace**: `npm install` compiles it from source into a
 native Node addon and builds the package's TypeScript layer. You can only fetch
 and build it once you have a CAS BACnet Stack license and access to that
@@ -321,19 +321,18 @@ npm start -- --help
 `main.ts`. Expected output:
 
 ```
-BACnet B-ASC (Application Specific Controller) Example - Node v1.2.0
+BACnet B-ASC (Application Specific Controller) Example - Node v1.2.1
 CAS BACnet Stack version: 6.0.23.0
 Common helper (common/) version: 3.1.0
 FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
-TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
+TX 21 bytes to <subnet-broadcast>:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
 FYI: Device 389003 ("Chipkin Example B-ASC") ready. Vendor ID 389. Press 'h' for help.
 ```
 
 The `TX` line is the start-up I-Am the device broadcasts to announce itself; the
 same line appears every 5 s after that, for the heartbeat (and stops while a
 `disable-initiation` is in force). It
-goes to the **local subnet broadcast** address (here `192.168.3.255`, computed
-from the Network Port's interface), not the global `255.255.255.255`. As clients
+goes to the **local subnet broadcast** address (computed from the Network Port's interface), not the global broadcast address. As clients
 talk to the device you'll see `RX ... bytes from ...` and `TX ... bytes to ...`
 lines; a WriteProperty to an output prints a line such as `WriteProperty:
 Analog Output 1 (Chartreuse) <- 24.00 @ priority 8`, and a
@@ -459,15 +458,15 @@ There is one example repository per standardized device profile in ASHRAE 135-20
 
 | Profile | C++ | Node.js | C# | Rust | Python | Go |
 |---|---|---|---|---|---|---|
-| **B-LSC** Life Safety Controller | [B-LSC-CPP](https://github.com/chipkin/BACnetProfileExample-B-LSC-CPP) 🚧 | Ask | Ask | Ask | Ask | Ask |
+| **B-LSC** Life Safety Controller | [B-LSC-CPP](https://github.com/chipkin/BACnetProfileExample-B-LSC-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-ALSC** Advanced Life Safety Controller | [B-ALSC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ALSC-CPP) | Ask | Ask | Ask | Ask | Ask |
 
 ### Access control controllers (Annex L.6)
 
 | Profile | C++ | Node.js | C# | Rust | Python | Go |
 |---|---|---|---|---|---|---|
-| **B-ACC** Access Control Controller | [B-ACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACC-CPP) | Ask | Ask | Ask | Ask | Ask |
-| **B-AACC** Advanced Access Control Controller | [B-AACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-AACC-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-ACC** Access Control Controller | [B-ACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACC-CPP) ⛔ blocked on [stack #2150](https://github.com/chipkin/cas-bacnet-stack/issues/2150), [#2044](https://github.com/chipkin/cas-bacnet-stack/issues/2044) | Ask | Ask | Ask | Ask | Ask |
+| **B-AACC** Advanced Access Control Controller | [B-AACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-AACC-CPP) ⛔ blocked on [stack #2150](https://github.com/chipkin/cas-bacnet-stack/issues/2150), [#2044](https://github.com/chipkin/cas-bacnet-stack/issues/2044) | Ask | Ask | Ask | Ask | Ask |
 
 ### Lighting controllers (Annex L.11)
 
@@ -527,7 +526,7 @@ Client-side profiles.
 | **B-EWS** Elevator Workstation | planned | — | — | — | — | — |
 | **B-AEWS** Advanced Elevator Workstation | planned | — | — | — | — | — |
 
-🚧 = in progress. ⛔ = Blocked Example (blocked on the named stack gap). "Ask" = not yet built for that language; contact Chipkin if you need it. Profile definitions: ANSI/ASHRAE 135-2024 Annex L. BIBB definitions: Annex K. Get the stack: <https://store.chipkin.com/services/stacks/bacnet-stack>.
+⛔ = Blocked Example (blocked on the named stack gap). "Ask" = not yet built for that language; contact Chipkin if you need it. Profile definitions: ANSI/ASHRAE 135-2024 Annex L. BIBB definitions: Annex K. Get the stack: <https://store.chipkin.com/services/stacks/bacnet-stack>.
 <!-- PROFILE-TABLE:END -->
 
 ## References
